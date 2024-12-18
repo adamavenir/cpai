@@ -251,17 +251,70 @@ This makes it easier to understand test failures by showing both the test code a
 The `--tests` argument accepts any test command:
 
 ```bash
-# Run all tests
-cpai --tests "pytest"
-
-# Run specific test file
-cpai --tests "pytest tests/test_example.py"
-
-# Run with pytest options
-cpai --tests "pytest tests/ -v"
-
-# Run other test runners
+# Python test runners
+cpai --tests "pytest tests/"
 cpai --tests "python -m unittest"
+
+# JavaScript test runners
+cpai --tests "jest"  # Jest automatically outputs JSON
+cpai --tests "vitest"  # Vitest with JSON reporter
+cpai --tests "jest src/components/__tests__"  # Test specific directory
+cpai --tests "vitest run components.test.ts"  # Test specific file
 ```
 
-Note: When using pytest, cpai automatically adds the `--json-report` flag to capture test results.
+### Supported Test Runners
+
+#### Python
+- **pytest**: Automatically adds `--json-report` flag
+  ```bash
+  cpai --tests "pytest"
+  ```
+  Requires: `pip install pytest-json-report`
+
+#### JavaScript
+- **Jest**: Automatically adds `--json` flag
+  ```bash
+  cpai --tests "jest"
+  ```
+  No additional configuration needed - Jest has built-in JSON reporting
+
+- **Vitest**: Automatically adds `--reporter=json` flag
+  ```bash
+  cpai --tests "vitest"
+  ```
+  No additional configuration needed - Vitest has built-in JSON reporting
+
+### Example JavaScript Test Output
+
+```markdown
+## Failing Tests
+
+### src/components/__tests__/Button.test.tsx::renders button with text
+
+```typescript
+test('renders button with text', () => {
+  render(<Button>Click me</Button>)
+  const button = screen.getByRole('button')
+  expect(button).toHaveTextContent('Click me!')
+})
+```
+
+#### Error Message
+```
+expect(element).toHaveTextContent('Click me!')
+
+Expected element to have text content:
+  Click me!
+Received:
+  Click me
+```
+
+#### Related Source Code
+
+##### src/components/Button.tsx
+```typescript
+export const Button: React.FC<ButtonProps> = ({ children }) => {
+  return <button>{children}</button>
+}
+```
+```

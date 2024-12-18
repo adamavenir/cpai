@@ -4,66 +4,93 @@ import ast
 import os
 import logging
 from typing import List, Set, Dict, Optional
+import re
+from pathlib import Path
 
-def extract_imports(file_path: str) -> List[str]:
-    """Extract all imports from a Python file.
+def extract_imports(file_path: str) -> Set[str]:
+    """Extract all imports from a JavaScript/TypeScript file.
     
     Args:
-        file_path: Path to the Python file
+        file_path: Path to the JavaScript/TypeScript file
         
     Returns:
-        List of imported module names
+        Set of import paths found in the file
     """
+    imports = set()
     try:
         with open(file_path, 'r') as f:
-            tree = ast.parse(f.read())
-            
-        imports = set()
-        for node in ast.walk(tree):
-            if isinstance(node, ast.Import):
-                for name in node.names:
-                    imports.add(name.name)
-            elif isinstance(node, ast.ImportFrom):
-                if node.module:  # Handles 'from x import y'
-                    imports.add(node.module)
-                
-        return sorted(list(imports))
+            content = f.read()
+        
+        # Remove indentation
+        lines = content.split('\n')
+        lines = [line.strip() for line in lines]
+        content = '\n'.join(lines)
+        
+        # Match ES6 imports
+        import_patterns = [
+            r'import\s+.*?from\s+[\'"]([^\'"]+)[\'"]',  # import x from 'y'
+            r'import\s+[\'"]([^\'"]+)[\'"]',  # import 'y'
+            r'import\s*\(\s*[\'"]([^\'"]+)[\'"]\s*\)',  # import('y')
+            r'require\s*\(\s*[\'"]([^\'"]+)[\'"]\s*\)',  # require('y')
+        ]
+        
+        for pattern in import_patterns:
+            matches = re.finditer(pattern, content, re.MULTILINE)
+            for match in matches:
+                imports.add(match.group(1))
+        
+        return imports
     except Exception as e:
-        logging.error(f"Failed to extract imports from {file_path}: {e}")
-        return []
+        print(f"Error extracting imports from {file_path}: {e}")
+        return set()
 
-def find_source_file(module_name: str, search_paths: List[str]) -> Optional[str]:
-    """Find the source file for a given module name.
+def find_source_file(import_path: str, search_paths: List[str]) -> Optional[str]:
+    """Find the actual source file for a given import path.
     
     Args:
-        module_name: Name of the module to find
-        search_paths: List of paths to search in
+        import_path: The import path from the import statement
+        search_paths: List of directories to search in
         
     Returns:
-        Path to the source file if found, None otherwise
+        Full path to the source file if found, None otherwise
     """
-    # Convert module path to file path
-    module_parts = module_name.split('.')
-    module_path = os.path.join(*module_parts)
+    # Handle relative imports
+    if import_path.startswith('.'):
+        # Count the number of parent directories to traverse
+        parent_count = import_path.count('../')
+        if parent_count > 0:
+            import_path = import_path[(parent_count * 3):]  # Remove '../' prefixes
+        else:
+            import_path = import_path[2:]  # Remove './' prefix
     
-    possible_files = [
-        f"{module_path}.py",  # Single file module
-        os.path.join(module_path, "__init__.py"),  # Package module
-        os.path.join('cpai', module_path.replace('cpai.', '') + '.py'),  # Try in cpai directory
-        os.path.join('cpai', module_path.replace('cpai.', ''), "__init__.py")  # Try in cpai package
-    ]
+    # List of possible extensions
+    extensions = ['.ts', '.tsx', '.js', '.jsx', '.mjs', '.cjs']
     
-    logging.debug(f"Searching for module {module_name} in paths: {search_paths}")
-    logging.debug(f"Possible files: {possible_files}")
+    for search_path in search_paths:
+        # Try with and without 'src' directory
+        paths_to_try = [
+            Path(search_path) / import_path,
+            Path(search_path) / 'src' / import_path
+        ]
+        
+        for base_path in paths_to_try:
+            # Try exact path first
+            if base_path.exists():
+                if base_path.is_dir():
+                    # Try index files in directory
+                    for ext in extensions:
+                        index_file = base_path / f'index{ext}'
+                        if index_file.exists():
+                            return str(index_file)
+                else:
+                    return str(base_path)
+            
+            # Try with extensions
+            for ext in extensions:
+                file_path = base_path.with_suffix(ext)
+                if file_path.exists():
+                    return str(file_path)
     
-    for path in search_paths:
-        for file in possible_files:
-            full_path = os.path.join(path, file)
-            if os.path.exists(full_path):
-                logging.debug(f"Found source file: {full_path}")
-                return full_path
-    
-    logging.debug(f"Source file not found for module: {module_name}")
     return None
 
 def get_search_paths(test_file: str) -> List[str]:
@@ -105,62 +132,89 @@ def get_search_paths(test_file: str) -> List[str]:
     return paths
 
 def analyze_test_file(test_file: str, test_mode: bool = False) -> Dict[str, str]:
-    """Analyze a test file and find its source dependencies.
+    """Analyze a test file and find all related source files.
     
     Args:
         test_file: Path to the test file
-        test_mode: If True, process all imports, not just cpai.* imports
+        test_mode: Whether to include test-related imports
         
     Returns:
-        Dictionary mapping module names to source file paths
+        Dictionary mapping import paths to source file paths
     """
-    # Get imports from test file
-    imports = extract_imports(test_file)
-    if not imports:
-        return {}
-        
-    # Get search paths
-    search_paths = get_search_paths(test_file)
-    
-    # Find source files for each import and their dependencies
     source_files = {}
-    processed = set()
+    test_dir = os.path.dirname(test_file)
     
-    def process_module(module_name: str):
-        if module_name in processed:
-            return
-        processed.add(module_name)
+    # Get base source directory (assuming standard project structure)
+    src_dir = test_dir
+    if 'tests' in test_dir or '__tests__' in test_dir:
+        src_dir = re.sub(r'/?tests/?|/__tests__/?', '', test_dir)
+    
+    # Add parent directories for relative imports
+    search_paths = [
+        test_dir,  # For imports relative to test file
+        src_dir,   # For source files
+        os.path.dirname(src_dir),  # For parent directory imports
+    ]
+    
+    # Extract and resolve imports
+    imports = extract_imports(test_file)
+    for import_path in imports:
+        # Skip node_modules and test utilities unless in test mode
+        if (not test_mode and 
+            (import_path.startswith('@') or 
+             'node_modules' in import_path or 
+             'test-utils' in import_path)):
+            continue
         
-        if source_file := find_source_file(module_name, search_paths):
-            source_files[module_name] = source_file
-            # Process imports from this module
-            module_imports = extract_imports(source_file)
-            for imp in module_imports:
-                if test_mode or imp.startswith('cpai.'):  # Process all imports in test mode
-                    process_module(imp)
-    
-    # Process all imports recursively
-    for module_name in imports:
-        if test_mode or module_name.startswith('cpai.'):  # Process all imports in test mode
-            process_module(module_name)
+        # Handle relative imports
+        if import_path.startswith('.'):
+            # Get absolute path relative to test file
+            abs_path = os.path.normpath(os.path.join(test_dir, import_path))
+            source_file = find_source_file(abs_path, [os.path.dirname(abs_path)])
+        else:
+            source_file = find_source_file(import_path, search_paths)
+        
+        if source_file:
+            source_files[import_path] = source_file
             
+            # Recursively analyze imported source files
+            if source_file != test_file:  # Avoid circular imports
+                nested_sources = analyze_test_file(source_file, test_mode=False)
+                source_files.update(nested_sources)
+    
+    # Add test file itself
+    source_files['test_file'] = test_file
+    
     return source_files
 
 def extract_source_code(source_files: Dict[str, str]) -> Dict[str, str]:
-    """Extract code from source files.
+    """Extract source code from all related files.
     
     Args:
-        source_files: Dictionary mapping module names to file paths
+        source_files: Dictionary mapping import paths to source file paths
         
     Returns:
-        Dictionary mapping module names to their source code
+        Dictionary mapping file paths to their source code
     """
     source_code = {}
-    for module_name, file_path in source_files.items():
+    
+    # Get unique file paths (including test file)
+    file_paths = set(source_files.values())
+    if 'test_file' in source_files:
+        file_paths.add(source_files['test_file'])
+    
+    for file_path in file_paths:
         try:
             with open(file_path, 'r') as f:
-                source_code[module_name] = f.read()
-        except Exception as e:
-            logging.error(f"Failed to read source file {file_path}: {e}")
+                content = f.read()
+                
+            # Remove indentation
+            lines = content.split('\n')
+            lines = [line.strip() for line in lines]
+            content = '\n'.join(lines)
             
+            source_code[file_path] = content
+        except Exception as e:
+            print(f"Error reading {file_path}: {e}")
+    
     return source_code 
