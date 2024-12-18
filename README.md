@@ -24,6 +24,8 @@ Options:
 - `-a, --all`: Include all files (including tests, configs, etc.)
 - `-c, --configs`: Include configuration files
 - `-x PATTERN [PATTERN...], --exclude PATTERN [PATTERN...]`: Additional patterns to exclude
+- `--tests COMMAND`: Run tests and extract failing test code (e.g. `--tests "pytest"`)
+- `--include-source`: Include related source code when using `--tests`
 
 If no files or directories are specified, cpai will process all supported files in the current directory.
 
@@ -31,6 +33,15 @@ Examples:
 ```
 # Process src/ directory but exclude specific paths
 cpai src/ -x "**/*.test.js" "docs/"
+
+# Run tests and show failing test code
+cpai --tests "pytest tests/"
+
+# Run tests and include related source code
+cpai --tests "pytest tests/" --include-source
+
+# Run specific test with source code and output to stdout
+cpai --tests "pytest tests/test_example.py -v" --include-source --stdout
 
 # Process multiple directories but exclude specific ones
 cpai src/ lib/ -x test/ docs/ "*.spec.ts"
@@ -172,3 +183,85 @@ Contributions are welcome! Please feel free to submit a Pull Request.
 ## License
 
 This project is licensed under the MIT License.
+
+## Test Integration
+
+cpai can help you understand test failures by extracting failing test code and optionally including related source code.
+
+### Basic Test Integration
+
+Run tests and extract failing test code:
+
+```bash
+cpai --tests "pytest"
+```
+
+This will:
+1. Run the specified test command
+2. Extract code from failing tests
+3. Format the output with:
+   - Test function code
+   - Error message
+   - Stack trace
+
+### Source Code Integration
+
+Include related source code for better context:
+
+```bash
+cpai --tests "pytest" --include-source
+```
+
+This will additionally:
+1. Analyze test files to find imported modules
+2. Extract code from related source files
+3. Include source code in the output
+
+Example output:
+
+```markdown
+## Failing Tests
+
+### tests/test_example.py::test_function
+
+```python
+def test_function():
+    result = calculate_sum(1, 2)
+    assert result == 4  # This fails
+```
+
+#### Error Message
+```
+AssertionError: assert 3 == 4
+```
+
+#### Related Source Code
+
+##### myapp.math
+```python
+def calculate_sum(a, b):
+    return a + b  # Here's the implementation
+```
+```
+
+This makes it easier to understand test failures by showing both the test code and the code being tested.
+
+### Test Command Options
+
+The `--tests` argument accepts any test command:
+
+```bash
+# Run all tests
+cpai --tests "pytest"
+
+# Run specific test file
+cpai --tests "pytest tests/test_example.py"
+
+# Run with pytest options
+cpai --tests "pytest tests/ -v"
+
+# Run other test runners
+cpai --tests "python -m unittest"
+```
+
+Note: When using pytest, cpai automatically adds the `--json-report` flag to capture test results.

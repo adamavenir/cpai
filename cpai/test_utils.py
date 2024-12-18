@@ -79,7 +79,7 @@ def extract_failing_tests(test_results: Dict, include_source: bool = False) -> L
                 if include_source:
                     logging.debug("Including source code for failing test")
                     # Get source files from test file
-                    source_files = analyze_test_file(file_path)
+                    source_files = analyze_test_file(file_path, test_mode=True)
                     logging.debug(f"Found source files: {source_files}")
                     if source_files:
                         source_code = extract_source_code(source_files)

@@ -1,17 +1,15 @@
 """Example test file to demonstrate source code integration."""
 
-from cpai.source_analysis import extract_imports, find_source_file, get_search_paths
+from cpai.source_analysis import analyze_test_file, extract_source_code
 from cpai.test_utils import extract_test_function
 
-def test_complex_source_integration():
-    """Test that demonstrates integration with multiple source files."""
-    # Get search paths for a test file
-    paths = get_search_paths(__file__)
+def test_source_integration():
+    """Test that demonstrates source code integration with a failing test."""
+    # Get source files for this test file
+    source_files = analyze_test_file(__file__)
     
-    # Try to find a source file using the full module path
-    source_file = find_source_file("cpai.test_utils", paths)
-    assert source_file is not None, "Should find the source file"
+    # Extract source code
+    source_code = extract_source_code(source_files)
     
-    # Extract test function (should return None for non-existent function)
-    test_code = extract_test_function(source_file, "nonexistent_function")
-    assert test_code is None, "Should not find a non-existent function"
+    # This assertion will fail to demonstrate both test code and source code output
+    assert len(source_code) > 10, "Should find more source files" 
