@@ -5,10 +5,10 @@ with open("README.md", "r", encoding="utf-8") as fh:
 
 setup(
     name="cpai",
-    version="2.0.0",
-    author="Sock",
+    version="0.1.0",
+    author="sockdrawermoney",
     author_email="sock@hey.com",
-    description="A tool to concatenate multiple files into a single markdown text string for AI assistants",
+    description="Concatenate and Paste to AI - A tool for sharing code context with LLMs",
     long_description=long_description,
     long_description_content_type="text/markdown",
     url="https://github.com/sockdrawermoney/cpai",
@@ -20,13 +20,17 @@ setup(
     ],
     python_requires=">=3.6",
     install_requires=[
-        "pyperclip>=1.8.0",
-        "pytest>=7.0.0",
-        "esprima>=4.0.0",
+        "pathspec>=0.11.0"
     ],
+    extras_require={
+        'test': [
+            'pytest>=7.0.0',
+            'pytest-json-report>=1.5.0'
+        ]
+    },
     entry_points={
         "console_scripts": [
-            "cpai=cpai:main"
+            "cpai=cpai.main:main"
         ],
     },
 )

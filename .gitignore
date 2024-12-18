@@ -28,3 +28,7 @@ htmlcov/
 .pytest_cache/
 
 node_modules/
+
+test_output.md
+PLAN.md
+.report.json

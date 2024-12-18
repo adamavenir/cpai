@@ -3,8 +3,10 @@ import tempfile
 import shutil
 import unittest
 from pathlib import Path
-from cpai.main import get_files
+from cpai.main import get_files, run_test_command, process_test_results
 from cpai.constants import DEFAULT_EXCLUDE_PATTERNS
+import json
+from unittest.mock import patch, mock_open
 
 class TestGetFiles(unittest.TestCase):
     def setUp(self):
@@ -154,6 +156,103 @@ class TestGetFiles(unittest.TestCase):
         
         # Should not include the broken symlink
         self.assertFalse("broken_link.py" in rel_files)
+
+    def test_run_test_command_pytest(self):
+        """Test running pytest command."""
+        mock_report = {
+            'tests': [
+                {
+                    'nodeid': 'tests/test_example.py::test_success',
+                    'outcome': 'passed'
+                }
+            ]
+        }
+        
+        # Mock both the subprocess run and file read
+        with patch('subprocess.run') as mock_run, \
+             patch('builtins.open', mock_open(read_data=json.dumps(mock_report))):
+            
+            mock_run.return_value.returncode = 0
+            mock_run.return_value.stdout = "Test output"
+            
+            result = run_test_command('pytest')
+            
+            # Verify pytest was called with json-report flag
+            mock_run.assert_called_once()
+            command = mock_run.call_args[0][0]
+            assert '--json-report' in command
+            
+            # Verify report was read
+            assert result == mock_report
+
+    def test_run_test_command_pytest_no_report(self):
+        """Test handling missing json report."""
+        with patch('subprocess.run') as mock_run, \
+             patch('builtins.open', side_effect=FileNotFoundError):
+            
+            mock_run.return_value.returncode = 0
+            result = run_test_command('pytest')
+            
+            assert result is None
+
+    def test_run_test_command_other(self):
+        """Test running non-pytest command."""
+        with patch('subprocess.run') as mock_run:
+            mock_run.return_value.returncode = 0
+            mock_run.return_value.stdout = "Test output"
+            mock_run.return_value.stderr = ""
+            
+            result = run_test_command('other_test_command')
+            
+            # Verify command was run as-is
+            mock_run.assert_called_once()
+            assert result == {'output': 'Test output', 'error': ''}
+
+    def test_process_test_results(self):
+        """Test processing of test results."""
+        test_results = {
+            'tests': [
+                {
+                    'nodeid': 'tests/test_example.py::test_failure',
+                    'outcome': 'failed',
+                    'call': {
+                        'longrepr': 'AssertionError: test failed'
+                    }
+                }
+            ]
+        }
+        
+        with tempfile.TemporaryDirectory() as temp_dir:
+            test_file = Path(temp_dir) / 'tests' / 'test_example.py'
+            test_file.parent.mkdir(parents=True)
+            test_content = '''
+def test_failure():
+    assert False, "test failed"
+'''
+            test_file.write_text(test_content)
+            
+            # Update test results with correct path
+            test_results['tests'][0]['nodeid'] = f'{test_file}::test_failure'
+            
+            output = process_test_results(test_results)
+            assert output is not None
+            assert 'test_failure' in output
+            assert 'assert False' in output
+            assert 'AssertionError' in output
+
+    def test_process_test_results_no_failures(self):
+        """Test processing results with no failures."""
+        test_results = {
+            'tests': [
+                {
+                    'nodeid': 'tests/test_example.py::test_success',
+                    'outcome': 'passed'
+                }
+            ]
+        }
+        
+        output = process_test_results(test_results)
+        assert output == "No failing tests found."
 
 if __name__ == '__main__':
     unittest.main()

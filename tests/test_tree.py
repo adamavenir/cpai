@@ -63,9 +63,10 @@ def test_javascript_class_method(js_extractor):
     }
     """
     functions = js_extractor.extract_functions(content)
-    assert len(functions) == 2
+    assert len(functions) == 3
     assert 'MyClass' in [f.name for f in functions]
-    assert 'MyClass.myMethod' in [f.name for f in functions]
+    assert 'constructor' in [f.name for f in functions]
+    assert 'myMethod' in [f.name for f in functions]
 
 def test_python_class_method(py_extractor):
     content = """

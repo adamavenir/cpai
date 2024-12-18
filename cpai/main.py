@@ -18,6 +18,7 @@ from .constants import (
     CORE_SOURCE_PATTERNS,
     DEFAULT_FILE_EXTENSIONS
 )
+from .test_utils import extract_failing_tests, format_test_output
 
 # Function to configure logging
 def configure_logging(debug):
@@ -29,7 +30,7 @@ def configure_logging(debug):
 def read_config():
     logging.debug("Reading configuration")
     default_config = {
-        "include": ["**/*"],
+        "include": ["."],
         "exclude": DEFAULT_EXCLUDE_PATTERNS.copy(),
         "outputFile": False,
         "usePastebin": True,
@@ -118,7 +119,7 @@ def get_files(directory: str, config: Dict = None, include_all: bool = False) ->
     logging.debug(f"Searching directory: {directory}")
     
     # Get patterns from config
-    include_patterns = config.get('include', ['**/*'])  # Default to all files
+    include_patterns = config.get('include', ['.'])  # Default to current directory
     custom_excludes = config.get('exclude', [])
     file_extensions = [] if include_all else config.get('fileExtensions', [])
     
@@ -131,6 +132,18 @@ def get_files(directory: str, config: Dict = None, include_all: bool = False) ->
     if custom_excludes:
         if isinstance(custom_excludes, list):
             exclude_patterns.extend(custom_excludes)
+    
+    # If include_configs is True, remove config file patterns from exclude_patterns
+    if config.get('include_configs'):
+        exclude_patterns = [p for p in exclude_patterns if not any(
+            config_pattern in p for config_pattern in [
+                'package.json', 'package-lock.json', 'yarn.lock',
+                'tsconfig.json', 'jsconfig.json', '*.config.js',
+                'pyproject.toml', 'setup.py', 'setup.cfg',
+                'requirements.txt', 'Pipfile', 'Pipfile.lock',
+                'bower.json', 'composer.json', 'composer.lock'
+            ]
+        )]
     
     # Add .gitignore patterns if .gitignore exists
     gitignore_path = os.path.join(directory, '.gitignore')
@@ -165,7 +178,7 @@ def get_files(directory: str, config: Dict = None, include_all: bool = False) ->
     # Create include spec
     include_spec = pathspec.PathSpec.from_lines(
         pathspec.patterns.GitWildMatchPattern,
-        include_patterns
+        ['**/*'] if '.' in include_patterns else include_patterns  # Convert '.' to '**/*'
     )
     
     # Get all files recursively
@@ -174,37 +187,35 @@ def get_files(directory: str, config: Dict = None, include_all: bool = False) ->
         for file in files:
             file_path = os.path.join(root, file)
             
-            # Skip broken symlinks
-            if os.path.islink(file_path) and not os.path.exists(file_path):
-                continue
-                
+            # Handle symlinks
+            if os.path.islink(file_path):
+                if not os.path.exists(file_path):
+                    continue  # Skip broken symlinks
+                real_path = os.path.realpath(file_path)
+                if not os.path.isfile(real_path):
+                    continue  # Skip if target is not a file
+            
+            # Get relative path for pattern matching
             rel_path = os.path.relpath(file_path, directory)
             
             # Skip if matches exclude patterns
             if exclude_spec.match_file(rel_path):
-                # Find which pattern matched
-                matching_pattern = None
-                for pattern in exclude_patterns:
-                    if pathspec.patterns.GitWildMatchPattern(pattern).match_file(rel_path):
-                        matching_pattern = pattern
-                        break
-                logging.debug(f"Excluding {rel_path} due to exclude pattern: {matching_pattern}")
+                logging.debug(f"Excluding {rel_path} due to exclude pattern")
                 continue
-                
+            
             # Skip if doesn't match include patterns
             if not include_spec.match_file(rel_path):
                 logging.debug(f"Excluding {rel_path} due to not matching include pattern")
                 continue
-                
+            
             # Check file extension if not including all files
             if file_extensions:
-                ext = os.path.splitext(file)[1].lower()
-                if not ext or ext not in file_extensions:
-                    logging.debug(f"Excluding {rel_path} due to file extension {ext}")
+                if not any(rel_path.lower().endswith(ext.lower()) for ext in file_extensions):
+                    logging.debug(f"Excluding {rel_path} due to file extension")
                     continue
             
-            logging.debug(f"Including file: {rel_path}")
-            all_files.append(os.path.abspath(file_path))  # Store absolute path
+            # Store absolute path
+            all_files.append(os.path.abspath(file_path))
     
     return sorted(all_files)
 
@@ -532,8 +543,13 @@ def write_output(content, config):
         except Exception as e:
             logging.error(f"Failed to write to file: {e}")
     
-    # Copy to clipboard if enabled
-    if config.get('usePastebin', True) and not config.get('stdout'):
+    # Output to stdout if specified
+    if config.get('stdout'):
+        print(content)
+        return
+    
+    # Copy to clipboard if enabled and not using stdout
+    if config.get('usePastebin', True):
         try:
             process = subprocess.Popen(['pbcopy'], stdin=subprocess.PIPE)
             process.communicate(content.encode('utf-8'))
@@ -550,8 +566,6 @@ def write_output(content, config):
             logging.error(f"Failed to copy to clipboard: {e}")
         except Exception as e:
             logging.error(f"Failed to copy to clipboard: {e}")
-    elif config.get('stdout'):
-        print(content)
 
 def should_process_file(file_path: str, config: Dict) -> bool:
     """Check if a file should be processed based on configuration.
@@ -729,6 +743,58 @@ def get_language_from_ext(ext: str) -> str:
     }
     return ext_to_lang.get(ext.lower(), '')
 
+def run_test_command(command: str) -> Optional[Dict]:
+    """Run a test command and return the JSON report.
+    
+    Args:
+        command: The test command to run (e.g. 'pytest')
+        
+    Returns:
+        Dict containing the test results, or None if execution failed
+    """
+    import json  # Move import here to fix scope issue
+    try:
+        # Add --json-report flag if using pytest
+        if command.startswith('pytest'):
+            if '--json-report' not in command:
+                command = f"{command} --json-report"
+            
+        # Run the command
+        result = subprocess.run(command.split(), capture_output=True, text=True)
+        
+        # For pytest, try to read the json report
+        if command.startswith('pytest'):
+            try:
+                with open('.report.json', 'r') as f:
+                    return json.load(f)
+            except (FileNotFoundError, json.JSONDecodeError) as e:
+                logging.error(f"Failed to read test report: {e}")
+                logging.error("Make sure pytest-json-report is installed: pip install pytest-json-report")
+                return None
+                
+        return {'output': result.stdout, 'error': result.stderr}
+        
+    except Exception as e:
+        logging.error(f"Failed to run test command: {e}")
+        return None
+
+def process_test_results(test_results: Dict, include_source: bool = False) -> Optional[str]:
+    """Process test results and return formatted output.
+    
+    Args:
+        test_results: Dictionary containing test results
+        include_source: Whether to include related source code
+        
+    Returns:
+        Markdown formatted string of failing tests
+    """
+    try:
+        failing_tests = extract_failing_tests(test_results, include_source=include_source)
+        return format_test_output(failing_tests)
+    except Exception as e:
+        logging.error(f"Failed to process test results: {e}")
+        return None
+
 def cpai(args, cli_options):
     """Main function to process files and generate output."""
     logging.debug("Starting cpai function")
@@ -807,43 +873,76 @@ def cpai(args, cli_options):
     # Format the content
     content = format_content(processed_files, config)
     
-    # Write output
+    # Write output if we have content
     if content:
-        write_output(content, config)
+        if config.get('stdout') or config.get('outputFile') or config.get('usePastebin', True):
+            write_output(content, config)
+            return None
         
     return content
 
 def main():
-    import logging
-    parser = argparse.ArgumentParser(description="Concatenate multiple files into a single markdown text string")
-    parser.add_argument('files', nargs='*', help="Files or directories to process")
-    parser.add_argument('-f', '--file', nargs='?', const=True, help="Output to file. Optionally specify filename.")
-    parser.add_argument('-n', '--noclipboard', action='store_true', help="Don't copy to clipboard")
-    parser.add_argument('--stdout', action='store_true', help="Output to stdout instead of clipboard")
-    parser.add_argument('-a', '--all', action='store_true', help="Include all files (including tests, configs, etc.)")
-    parser.add_argument('-x', '--exclude', nargs='+', help="Additional patterns to exclude")
-    parser.add_argument('--debug', action='store_true', help="Enable debug logging")
-    parser.add_argument('--tree', action='store_true', help="Display a tree view of the directory structure")
+    """Main entry point."""
+    parser = argparse.ArgumentParser(description='Code Path AI - Analyze and understand your codebase')
+    parser.add_argument('files', nargs='*', help='Files or directories to process')
+    parser.add_argument('--debug', action='store_true', help='Enable debug logging')
+    parser.add_argument('--file', help='Output file path')
+    parser.add_argument('--noclipboard', action='store_true', help='Disable clipboard output')
+    parser.add_argument('--stdout', action='store_true', help='Output to stdout instead of clipboard')
+    parser.add_argument('--all', action='store_true', help='Include all file types')
+    parser.add_argument('--configs', action='store_true', help='Include config files')
+    parser.add_argument('--exclude', nargs='+', help='Additional patterns to exclude')
+    parser.add_argument('--tests', type=str, help="Run tests and include failing test code. Provide the test command (e.g. 'pytest')")
+    parser.add_argument('--include-source', action='store_true', help='Include related source code when using --tests')
 
     try:
         args = parser.parse_args()
         configure_logging(args.debug)
 
         cli_options = {
-            'outputFile': args.file if args.file is not None else False,
-            'usePastebin': not args.noclipboard and not args.stdout,
+            'outputFile': args.file,
+            'usePastebin': not args.noclipboard,
             'include_all': args.all,
+            'include_configs': args.configs,
             'exclude': args.exclude,
-            'tree': args.tree,
-            'stdout': args.stdout
+            'test_command': args.tests,
+            'stdout': args.stdout,
+            'include_source': args.include_source
         }
 
         logging.debug("Starting main function")
-        cpai(args.files, cli_options)
-    except (KeyboardInterrupt, SystemExit):
-        # Handle both KeyboardInterrupt and SystemExit
+        
+        # If test command is provided, run tests first
+        if args.tests:
+            test_results = run_test_command(args.tests)
+            if test_results:
+                logging.info("Tests completed. Processing results...")
+                output = process_test_results(test_results, include_source=args.include_source)
+                if output:
+                    if cli_options['stdout']:
+                        print(output)
+                    elif cli_options['outputFile']:
+                        filename = cli_options['outputFile'] if isinstance(cli_options['outputFile'], str) else 'output-cpai.md'
+                        with open(filename, 'w') as f:
+                            f.write(output)
+                        logging.info(f"Output written to {filename}")
+                    else:
+                        # Copy to clipboard
+                        write_output(output, cli_options)
+                    return
+                else:
+                    logging.error("Failed to process test results")
+                    return 1
+            else:
+                logging.error("Failed to run tests")
+                return 1
+        
+        return cpai(args.files, cli_options)
+    except KeyboardInterrupt:
         logging.error("Operation cancelled by user")
         sys.exit(1)
-    except Exception as e:
-        logging.error(f"An error occurred: {e}", exc_info=True)
-        sys.exit(1)
+    except SystemExit:
+        raise  # Re-raise SystemExit without logging
+
+if __name__ == '__main__':
+    sys.exit(main())
