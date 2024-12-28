@@ -22,6 +22,10 @@ def run_test_command(command: str) -> Optional[Dict]:
         if command.startswith('pytest'):
             if '--json-report' not in command:
                 command = f"{command} --json-report"
+            if '--json-report-file' not in command:
+                command = f"{command} --json-report-file=.report.json"
+            logging.debug(f"Running pytest command: {command}")
+            
         elif command.startswith('jest'):
             if '--json' not in command:
                 command = f"{command} --json"
@@ -31,15 +35,26 @@ def run_test_command(command: str) -> Optional[Dict]:
             
         # Run the command
         result = subprocess.run(command.split(), capture_output=True, text=True)
+        logging.debug(f"Command stderr: {result.stderr}")
         
         # Parse results based on test runner
         if command.startswith('pytest'):
             try:
                 with open('.report.json', 'r') as f:
-                    return {'runner': 'pytest', 'results': json.load(f)}
+                    report = json.load(f)
+                    logging.debug(f"Pytest JSON report: {json.dumps(report, indent=2)}")
+                    # Clean up the report file
+                    try:
+                        os.remove('.report.json')
+                    except OSError:
+                        pass
+                    return {'runner': 'pytest', 'results': report}
             except (FileNotFoundError, json.JSONDecodeError) as e:
                 logging.error(f"Failed to read pytest report: {e}")
                 logging.error("Make sure pytest-json-report is installed: pip install pytest-json-report")
+                # If we can't read the report but have stderr, use that
+                if result.stderr:
+                    return {'runner': 'pytest', 'results': {'errors': [{'longrepr': result.stderr}]}}
                 return None
         elif command.startswith('jest'):
             try:
@@ -54,10 +69,8 @@ def run_test_command(command: str) -> Optional[Dict]:
                 logging.error(f"Failed to parse Vitest output: {e}")
                 return None
                 
-        return {'runner': 'other', 'output': result.stdout, 'error': result.stderr}
-        
     except Exception as e:
-        logging.error(f"Failed to run test command: {e}")
+        logging.error(f"Error running test command: {e}")
         return None
 
 def extract_js_test_function(file_path: str, function_name: str) -> Optional[str]:
@@ -107,19 +120,52 @@ def parse_test_results(test_results: Dict) -> List[Dict[str, str]]:
     Returns:
         List of failing test info dictionaries
     """
+    # Handle raw pytest results (no runner field)
+    if 'tests' in test_results and 'runner' not in test_results:
+        test_results = {'runner': 'pytest', 'results': test_results}
+    
     runner = test_results.get('runner')
     results = test_results.get('results', {})
+    logging.debug(f"Parsing test results for runner: {runner}")
     
     if runner == 'pytest':
-        return [
-            {
-                'file': test['nodeid'].split('::')[0],
-                'function': test['nodeid'].split('::')[-1],
-                'message': test.get('call', {}).get('longrepr', '')
-            }
-            for test in results.get('tests', [])
-            if test.get('outcome') == 'failed'
-        ]
+        failing_tests = []
+        
+        # Handle collection errors from collectors field
+        for collector in results.get('collectors', []):
+            if collector.get('outcome') == 'failed':
+                logging.debug(f"Processing pytest collector error: {collector}")
+                error_msg = collector.get('longrepr', '')
+                file_path = collector.get('nodeid', '')
+                
+                if file_path:
+                    failing_tests.append({
+                        'file': file_path,
+                        'function': 'collection_error',
+                        'message': error_msg
+                    })
+        
+        # Handle regular test failures
+        for test in results.get('tests', []):
+            logging.debug(f"Processing pytest test: {test.get('nodeid')} (outcome: {test.get('outcome')})")
+            if test.get('outcome') in ('failed', 'error'):
+                failing_tests.append({
+                    'file': test['nodeid'].split('::')[0],
+                    'function': test['nodeid'].split('::')[-1],
+                    'message': test.get('call', {}).get('longrepr', '')
+                })
+        
+        # Handle test failures that don't have a call section
+        for test in results.get('tests', []):
+            if test.get('outcome') in ('failed', 'error') and not test.get('call'):
+                failing_tests.append({
+                    'file': test['nodeid'].split('::')[0],
+                    'function': test['nodeid'].split('::')[-1],
+                    'message': test.get('longrepr', '')
+                })
+        
+        logging.debug(f"Found {len(failing_tests)} failing pytest tests")
+        return failing_tests
     elif runner == 'jest':
         failing_tests = []
         for test_result in results.get('testResults', []):
@@ -162,11 +208,48 @@ def extract_failing_tests(test_results: Dict, include_source: bool = False) -> L
     
     # Parse test results based on runner
     parsed_results = parse_test_results(test_results)
+    logging.debug(f"Found {len(parsed_results)} failing tests to process")
+    
+    # Get the test directory from the root field in the test results
+    test_root = test_results.get('results', {}).get('root')
+    if not test_root and parsed_results:
+        # Try to extract test root from error message
+        first_test = parsed_results[0]
+        error_msg = first_test.get('message', '')
+        import re
+        root_match = re.search(r"test module '([^']+)'", error_msg)
+        if root_match:
+            # Get the root directory of the project
+            test_root = os.path.dirname(os.path.dirname(os.path.dirname(os.path.dirname(root_match.group(1)))))
+            logging.debug(f"Extracted test root from error message: {test_root}")
+    
+    if not test_root:
+        # Try to find the test directory from the command line arguments
+        import sys
+        for arg in sys.argv:
+            if '../' in arg and os.path.exists(arg) and os.path.isdir(arg):
+                test_root = os.path.abspath(arg)
+                break
+    
+    if not test_root:
+        logging.error("Could not determine test root directory")
+        return []
+    
+    logging.debug(f"Using test root directory: {test_root}")
     
     for test in parsed_results:
         file_path = test['file']
         func_name = test['function']
         logging.debug(f"Processing failing test: {file_path}::{func_name}")
+        
+        # Convert relative path to absolute path if needed
+        if not os.path.isabs(file_path):
+            abs_path = os.path.abspath(os.path.join(test_root, file_path))
+            if os.path.exists(abs_path):
+                file_path = abs_path
+            else:
+                logging.warning(f"Could not find test file: {abs_path}")
+                continue
         
         # Extract test code based on file type
         if file_path.endswith(('.js', '.jsx', '.ts', '.tsx')):
@@ -195,6 +278,8 @@ def extract_failing_tests(test_results: Dict, include_source: bool = False) -> L
                         logging.debug(f"Added source code for modules: {list(source_code.keys())}")
                 
             failing_tests.append(test_info)
+        else:
+            logging.warning(f"Could not extract code for test: {file_path}::{func_name}")
     
     return failing_tests
 
@@ -211,6 +296,10 @@ def extract_test_function(file_path: str, function_name: str) -> Optional[str]:
     try:
         with open(file_path, 'r') as f:
             content = f.read()
+            
+        # For collection errors, return the entire file content
+        if function_name == 'collection_error':
+            return content
             
         tree = ast.parse(content)
         for node in ast.walk(tree):
@@ -254,24 +343,45 @@ def format_test_output(failing_tests: List[Dict[str, str]]) -> str:
         
     output = ["## Failing Tests\n"]
     
+    # Group tests by error type
+    collection_errors = []
+    test_failures = []
     for test in failing_tests:
-        output.append(f"### {test['file']}::{test['function']}\n")
-        output.append("```python")
-        output.append(test['code'])
-        output.append("```\n")
-        if test['message']:
-            output.append("#### Error Message")
+        if test['function'] == 'collection_error':
+            collection_errors.append(test)
+        else:
+            test_failures.append(test)
+    
+    # Format collection errors first
+    if collection_errors:
+        output.append("### Collection Errors\n")
+        for test in collection_errors:
+            output.append(f"**{test['file']}**")
             output.append("```")
             output.append(test['message'])
             output.append("```\n")
-            
-        # Add source code if available
-        if source_code := test.get('source_code'):
-            output.append("#### Related Source Code\n")
-            for module_name, code in source_code.items():
-                output.append(f"##### {module_name}")
-                output.append("```python")
-                output.append(code)
+    
+    # Format test failures
+    if test_failures:
+        output.append("### Test Failures\n")
+        for test in test_failures:
+            output.append(f"**{test['file']}::{test['function']}**")
+            output.append("```python")
+            output.append(test['code'])
+            output.append("```")
+            if test['message']:
+                output.append("#### Error Message")
+                output.append("```")
+                output.append(test['message'])
                 output.append("```\n")
+                
+            # Add source code if available
+            if source_code := test.get('source_code'):
+                output.append("#### Related Source Code\n")
+                for module_name, code in source_code.items():
+                    output.append(f"##### {module_name}")
+                    output.append("```python")
+                    output.append(code)
+                    output.append("```\n")
             
     return '\n'.join(output) 

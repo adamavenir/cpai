@@ -65,10 +65,9 @@ def test_default_exclude_patterns():
             'fileExtensions': ['.py', '.js', '.ts', '.md']
         }
         
+        # Get files and convert to relative paths
         files = get_files(temp_dir, config)
-        
-        # Convert to set for easier comparison
-        files = set(files)
+        rel_files = {os.path.relpath(f, temp_dir) for f in files}
         
         # These files should be included
         should_include = {
@@ -90,8 +89,9 @@ def test_default_exclude_patterns():
         }
         
         # Verify included files
-        assert files == should_include, f"Expected {should_include}, but got {files}"
+        assert rel_files == should_include, f"Expected {should_include}, but got {rel_files}"
         
         # Verify excluded files
         for excluded in should_exclude:
-            assert excluded not in files, f"{excluded} should have been excluded"
+            excluded_path = os.path.join(temp_dir, excluded)
+            assert excluded_path not in files, f"File should be excluded: {excluded}"

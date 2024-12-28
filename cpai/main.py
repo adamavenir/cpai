@@ -930,6 +930,7 @@ def main():
                         # Copy to clipboard
                         write_output(output, cli_options)
                     return
+
                 else:
                     logging.error("Failed to process test results")
                     return 1
@@ -946,3 +947,27 @@ def main():
 
 if __name__ == '__main__':
     sys.exit(main())
+
+def format_tree_recursive(tree, prefix=''):
+    """Format a tree structure recursively."""
+    if not tree:
+        return ''
+        
+    # Sort items by name
+    items = sorted(tree.items())
+    
+    # Format each item
+    result = []
+    for i, (name, subtree) in enumerate(items):
+        is_last_item = i == len(items) - 1
+        connector = '└── ' if is_last_item else '├── '
+        new_prefix = prefix + ('    ' if is_last_item else '│   ')
+        
+        # Add this item
+        result.append(prefix + connector + name)
+        
+        # Add subtree if any
+        if isinstance(subtree, dict):
+            result.append(format_tree_recursive(subtree, new_prefix))
+            
+    return '\n'.join(result)
