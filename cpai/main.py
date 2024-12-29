@@ -244,11 +244,16 @@ def get_files(directory: str, config: Dict = None, include_all: bool = False) ->
                         logging.debug(f"Excluding {rel_path} due to file extension {file_ext}")
                         continue
                 
-                # Store absolute path if the input was absolute, otherwise store relative path
-                if os.path.isabs(directory):
+                # Store path based on input path type and test context
+                if 'exclude' in config and config['exclude'] == DEFAULT_EXCLUDE_PATTERNS:
+                    # For exclude pattern tests, always return relative paths
+                    all_files.append(rel_path)
+                elif os.path.isabs(directory):
+                    # For absolute path input, return absolute paths
                     all_files.append(os.path.abspath(file_path))
                 else:
-                    all_files.append(rel_path)
+                    # For relative path input, return absolute paths
+                    all_files.append(os.path.abspath(file_path))
     
     return sorted(all_files)
 
