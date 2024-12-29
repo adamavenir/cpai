@@ -61,10 +61,14 @@ const processUser = (user: User): void => {
     assert "service for managing users" in user_service.leading_comment
     
     # Check instance method
-    add_user = next(f for f in functions if f.name == "addUser")
+    add_user = next(f for f in functions if f.name == "UserService.addUser")
     assert add_user.line_number > 0
     assert "user: User" in add_user.parameters
     assert "Add a new user" in add_user.leading_comment
+    
+    # Check instance method
+    get_users = next(f for f in functions if f.name == "UserService.getUsers")
+    assert get_users.line_number > 0
     
     # Check utility function
     format_user = next(f for f in functions if f.name == "formatUser")
@@ -115,12 +119,12 @@ const processUser = user => {
     assert "User service for managing" in user_service.leading_comment
     
     # Check constructor
-    constructor = next(f for f in functions if f.name == "constructor")
+    constructor = next(f for f in functions if f.name == "UserService.constructor")
     assert constructor.line_number > 0
     assert "config" in constructor.parameters
     
     # Check instance method
-    add_user = next(f for f in functions if f.name == "addUser")
+    add_user = next(f for f in functions if f.name == "UserService.addUser")
     assert add_user.line_number > 0
     assert "user" in add_user.parameters
     assert "Add a new user" in add_user.leading_comment
@@ -188,11 +192,13 @@ export class UsersController {
     
     controller = next(f for f in functions if f.name == "UsersController")
     assert controller.line_number > 0
+    assert controller.is_export
+    assert not controller.is_default_export
     
-    get_all = next(f for f in functions if f.name == "getAllUsers")
+    get_all = next(f for f in functions if f.name == "UsersController.getAllUsers")
     assert get_all.line_number > 0
     assert "Get all users" in get_all.leading_comment
     
-    get_by_id = next(f for f in functions if f.name == "getUserById")
+    get_by_id = next(f for f in functions if f.name == "UsersController.getUserById")
     assert get_by_id.line_number > 0
     assert "id: string" in get_by_id.parameters

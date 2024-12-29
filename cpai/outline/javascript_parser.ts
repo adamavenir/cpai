@@ -100,13 +100,27 @@ function extractFunctions(sourceFile: ts.SourceFile): FunctionInfo[] {
 
     function visit(node: ts.Node) {
         if (ts.isClassDeclaration(node)) {
-            // Only visit class members, don't add the class itself
+            // Add the class itself
+            const className = node.name?.getText() || 'anonymous';
+            const exportType = getExportType(node);
+            functions.push({
+                name: className,
+                line: sourceFile.getLineAndCharacterOfPosition(node.getStart()).line + 1,
+                leadingComment: getLeadingComment(node, sourceFile),
+                parameters: '',
+                isAsync: false,
+                isExport: exportType !== null,
+                isDefaultExport: exportType === 'default',
+                nodeType: 'class'
+            });
+
+            // Visit class members
             node.members.forEach(member => {
                 if (ts.isMethodDeclaration(member) || ts.isConstructorDeclaration(member)) {
                     const methodName = ts.isConstructorDeclaration(member) ? 'constructor' : member.name?.getText() || 'anonymous';
                     const exportType = getExportType(member);
                     functions.push({
-                        name: methodName,
+                        name: `${className}.${methodName}`,
                         line: sourceFile.getLineAndCharacterOfPosition(member.getStart()).line + 1,
                         leadingComment: getLeadingComment(member, sourceFile),
                         parameters: getParameters(member),

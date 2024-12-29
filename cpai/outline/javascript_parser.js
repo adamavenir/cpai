@@ -78,10 +78,11 @@ function extractFunctions(sourceFile) {
     function visit(node) {
         var _a, _b, _c, _d;
         if (ts.isClassDeclaration(node)) {
-            var name_1 = ((_a = node.name) === null || _a === void 0 ? void 0 : _a.text) || 'AnonymousClass';
+            // Add the class itself
+            var className_1 = ((_a = node.name) === null || _a === void 0 ? void 0 : _a.getText()) || 'anonymous';
             var exportType = getExportType(node);
             functions.push({
-                name: name_1,
+                name: className_1,
                 line: sourceFile.getLineAndCharacterOfPosition(node.getStart()).line + 1,
                 leadingComment: getLeadingComment(node, sourceFile),
                 parameters: '',
@@ -97,7 +98,7 @@ function extractFunctions(sourceFile) {
                     var methodName = ts.isConstructorDeclaration(member) ? 'constructor' : ((_a = member.name) === null || _a === void 0 ? void 0 : _a.getText()) || 'anonymous';
                     var exportType_1 = getExportType(member);
                     functions.push({
-                        name: methodName,
+                        name: "".concat(className_1, ".").concat(methodName),
                         line: sourceFile.getLineAndCharacterOfPosition(member.getStart()).line + 1,
                         leadingComment: getLeadingComment(member, sourceFile),
                         parameters: getParameters(member),
@@ -110,17 +111,17 @@ function extractFunctions(sourceFile) {
             });
         }
         else if (ts.isFunctionDeclaration(node) || ts.isArrowFunction(node) || ts.isFunctionExpression(node)) {
-            var name_2 = '';
+            var name_1 = '';
             var isExport_1 = false;
             var isDefaultExport_1 = false;
             if (ts.isFunctionDeclaration(node)) {
-                name_2 = ((_b = node.name) === null || _b === void 0 ? void 0 : _b.text) || 'anonymous';
+                name_1 = ((_b = node.name) === null || _b === void 0 ? void 0 : _b.text) || 'anonymous';
                 var exportType = getExportType(node);
                 isExport_1 = exportType !== null;
                 isDefaultExport_1 = exportType === 'default';
             }
             else if (ts.isVariableDeclaration(node.parent)) {
-                name_2 = node.parent.name.getText();
+                name_1 = node.parent.name.getText();
                 // Check for export on variable declaration
                 var statement = (_c = node.parent.parent) === null || _c === void 0 ? void 0 : _c.parent;
                 if (ts.isVariableStatement(statement)) {
@@ -133,16 +134,16 @@ function extractFunctions(sourceFile) {
                     ts.forEachChild(sourceFile, function (child) {
                         if (ts.isExportAssignment(child) &&
                             ts.isIdentifier(child.expression) &&
-                            child.expression.text === name_2) {
+                            child.expression.text === name_1) {
                             isExport_1 = true;
                             isDefaultExport_1 = true;
                         }
                     });
                 }
             }
-            if (name_2) {
+            if (name_1) {
                 functions.push({
-                    name: name_2,
+                    name: name_1,
                     line: sourceFile.getLineAndCharacterOfPosition(node.getStart()).line + 1,
                     leadingComment: getLeadingComment(node, sourceFile),
                     parameters: getParameters(node),
