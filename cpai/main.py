@@ -244,8 +244,11 @@ def get_files(directory: str, config: Dict = None, include_all: bool = False) ->
                         logging.debug(f"Excluding {rel_path} due to file extension {file_ext}")
                         continue
                 
-                # Store relative path
-                all_files.append(rel_path)
+                # Store absolute path if the input was absolute, otherwise store relative path
+                if os.path.isabs(directory):
+                    all_files.append(os.path.abspath(file_path))
+                else:
+                    all_files.append(rel_path)
     
     return sorted(all_files)
 
