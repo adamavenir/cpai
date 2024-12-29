@@ -169,28 +169,26 @@ def get_files(directory: str, config: Dict = None, include_all: bool = False) ->
     for root, dirs, files in os.walk(directory, followlinks=True):
         # If we're only processing directories and this is the root directory
         if config.get('dirs_only'):
-            if root == directory:
-                # Only process directories, not files
-                for dir_name in dirs:
-                    dir_path = os.path.join(root, dir_name)
-                    rel_path = os.path.relpath(dir_path, directory)
-                    
-                    # Skip if matches exclude patterns and not negated
-                    if exclude_spec.match_file(rel_path):
-                        if not negated_spec or not negated_spec.match_file(rel_path):
-                            logging.debug(f"Excluding directory {rel_path} due to exclude pattern")
-                            continue
-                        
-                    # Skip if doesn't match include patterns
-                    if not include_spec.match_file(rel_path):
-                        logging.debug(f"Excluding directory {rel_path} due to not matching include pattern")
+            # Process directories at any level
+            for dir_name in dirs:
+                dir_path = os.path.join(root, dir_name)
+                rel_path = os.path.relpath(dir_path, directory)
+                
+                # Skip if matches exclude patterns and not negated
+                if exclude_spec.match_file(rel_path):
+                    if not negated_spec or not negated_spec.match_file(rel_path):
+                        logging.debug(f"Excluding directory {rel_path} due to exclude pattern")
                         continue
                     
-                    logging.debug(f"Including directory: {rel_path}")
-                    all_files.append(os.path.abspath(dir_path))
-            # Don't process any more directories or files after the root level
-            break
-            
+                # Skip if doesn't match include patterns
+                if not include_spec.match_file(rel_path):
+                    logging.debug(f"Excluding directory {rel_path} due to not matching include pattern")
+                    continue
+                
+                logging.debug(f"Including directory: {rel_path}")
+                all_files.append(os.path.abspath(dir_path))
+            continue
+        
         # Normal file processing if not in directory-only mode
         else:
             for file in files:

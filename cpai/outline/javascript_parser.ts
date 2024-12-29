@@ -100,20 +100,7 @@ function extractFunctions(sourceFile: ts.SourceFile): FunctionInfo[] {
 
     function visit(node: ts.Node) {
         if (ts.isClassDeclaration(node)) {
-            const name = node.name?.text || 'AnonymousClass';
-            const exportType = getExportType(node);
-            functions.push({
-                name,
-                line: sourceFile.getLineAndCharacterOfPosition(node.getStart()).line + 1,
-                leadingComment: getLeadingComment(node, sourceFile),
-                parameters: '',
-                isAsync: false,
-                isExport: exportType !== null,
-                isDefaultExport: exportType === 'default',
-                nodeType: 'class'
-            });
-
-            // Visit class members
+            // Only visit class members, don't add the class itself
             node.members.forEach(member => {
                 if (ts.isMethodDeclaration(member) || ts.isConstructorDeclaration(member)) {
                     const methodName = ts.isConstructorDeclaration(member) ? 'constructor' : member.name?.getText() || 'anonymous';
