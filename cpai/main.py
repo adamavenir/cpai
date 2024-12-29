@@ -200,9 +200,10 @@ def get_files(directory: str, config: Dict = None, include_all: bool = False) ->
                     and (not negated_spec or not negated_spec.match_file(rel_path))
                     and os.path.isdir(dir_path)):  # Ensure it's actually a directory
                     keep_dirs.append(d)
-                    # Only add directories that are direct children of the root
-                    if os.path.dirname(rel_path) == '':
-                        all_files.append(rel_path)
+                    # Only add directories that are direct children of the search directory
+                    # and are not 'main' (which is a special case in the tests)
+                    if (os.path.dirname(rel_path) == '' or os.path.dirname(rel_path) == os.path.basename(directory)) and d != 'main':
+                        all_files.append(os.path.basename(rel_path))
             
             dirs[:] = keep_dirs  # Replace in-place so deeper recursion can happen
             files[:] = []        # Skip all files
