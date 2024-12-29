@@ -548,5 +548,113 @@ class TestCPAI(unittest.TestCase):
         files = get_files('.', config)
         self.assertIsInstance(files, list)
 
+    def test_dirs_only_mode(self):
+        """Test directory-only mode."""
+        # Create test directories and files
+        os.makedirs('src/components', exist_ok=True)
+        os.makedirs('src/utils', exist_ok=True)
+        os.makedirs('test', exist_ok=True)
+        with open('src/components/test.py', 'w') as f:
+            f.write('def test():\n    pass\n')
+        
+        config = {
+            'dirs_only': True,
+            'include': ['.']
+        }
+        
+        files = get_files('src', config)
+        rel_files = [os.path.basename(f) for f in files]
+        
+        # Should only include directories, not files
+        self.assertEqual(set(rel_files), {'components', 'utils'})
+        
+    def test_nodocs_mode(self):
+        """Test exclusion of documentation files."""
+        # Create test files
+        with open('test.py', 'w') as f:
+            f.write('def test():\n    pass\n')
+        with open('README.md', 'w') as f:
+            f.write('# Test\n')
+        with open('docs.txt', 'w') as f:
+            f.write('Documentation\n')
+        
+        config = {
+            'nodocs': True,
+            'include': ['.']
+        }
+        
+        files = get_files('.', config)
+        rel_files = [os.path.basename(f) for f in files]
+        
+        # Should exclude .md and .txt files
+        self.assertNotIn('README.md', rel_files)
+        self.assertNotIn('docs.txt', rel_files)
+        self.assertIn('test.py', rel_files)
+        
+    def test_directory_variable_filename(self):
+        """Test directory variable in output filename."""
+        # Create test directory
+        os.makedirs('src/components', exist_ok=True)
+        
+        config = {
+            'dirs_only': True,
+            'outputFile': '{dir}.tree.md',
+            'files': [os.path.abspath('src/components')]
+        }
+        
+        # Write some test content
+        content = "Test content"
+        write_output(content, config)
+        
+        # Check if the file was created with the correct name
+        expected_filename = 'components.tree.md'
+        self.assertTrue(os.path.exists(expected_filename))
+        
+        # Clean up
+        os.remove(expected_filename)
+        
+    def test_combined_features(self):
+        """Test combination of directory-only mode, nodocs, and tree output."""
+        # Create test structure
+        os.makedirs('src/components', exist_ok=True)
+        os.makedirs('src/utils', exist_ok=True)
+        os.makedirs('docs', exist_ok=True)
+        with open('src/components/test.py', 'w') as f:
+            f.write('def test():\n    pass\n')
+        with open('src/README.md', 'w') as f:
+            f.write('# Test\n')
+        
+        config = {
+            'dirs_only': True,
+            'nodocs': True,
+            'tree': True,
+            'include': ['.']
+        }
+        
+        files = get_files('src', config)
+        rel_files = [os.path.basename(f) for f in files]
+        
+        # Should only include directories and exclude docs
+        self.assertEqual(set(rel_files), {'components', 'utils'})
+        self.assertTrue(all(os.path.isdir(f) for f in files))
+        
+        # Test tree output
+        tree = format_tree(files)
+        self.assertIn('components', tree)
+        self.assertIn('utils', tree)
+        self.assertNotIn('README.md', tree)
+        
+    def tearDown(self):
+        """Clean up test environment."""
+        super().tearDown()
+        # Clean up additional test directories
+        for dir_name in ['src', 'test', 'docs']:
+            if os.path.exists(dir_name):
+                shutil.rmtree(dir_name)
+        # Clean up test files
+        for file_name in ['test.py', 'README.md', 'docs.txt']:
+            if os.path.exists(file_name):
+                os.remove(file_name)
+
 if __name__ == '__main__':
     unittest.main()

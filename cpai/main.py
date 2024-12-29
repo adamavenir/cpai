@@ -29,7 +29,7 @@ def configure_logging(debug):
 def read_config():
     logging.debug("Reading configuration")
     default_config = {
-        "include": ["**/*"],
+        "include": ['.'],
         "exclude": DEFAULT_EXCLUDE_PATTERNS.copy(),
         "outputFile": False,
         "usePastebin": True,
@@ -103,66 +103,65 @@ def get_files(directory: str, config: Dict = None, include_all: bool = False) ->
     """Get list of files to process.
     
     Args:
-        directory: Directory to search
-        config: Configuration dictionary
-        include_all: Whether to include all file types
+        directory: Directory to process
+        config: Configuration options
+        include_all: Whether to include all files
         
     Returns:
-        List of absolute file paths to process
+        List of absolute file paths
     """
+    logging.debug(f"Getting files from {directory}")
+    logging.debug(f"Config: {config}")
+    
     if config is None:
         config = {}
-
+    
     # Ensure we have absolute path for directory
     directory = os.path.abspath(directory)
-    logging.debug(f"Searching directory: {directory}")
     
     # Get patterns from config
-    include_patterns = config.get('include', ['**/*'])  # Default to all files
-    custom_excludes = config.get('exclude', [])
-    file_extensions = [] if include_all else config.get('fileExtensions', [])
+    include_patterns = config.get('include', ['.'])
+    exclude_patterns = config.get('exclude', [])
+    if exclude_patterns is None:
+        exclude_patterns = []
+    
+    # Split exclude patterns into normal and negated patterns
+    normal_excludes = [p for p in exclude_patterns if not p.startswith('!')]
+    negated_excludes = [p[1:] for p in exclude_patterns if p.startswith('!')]
+    
+    # Add default exclude patterns to normal excludes
+    normal_excludes = DEFAULT_EXCLUDE_PATTERNS.copy() + normal_excludes
+    
+    # Normalize file extensions to always start with a dot
+    file_extensions = [] if include_all else [
+        ext if ext.startswith('.') else f'.{ext}'
+        for ext in config.get('fileExtensions', [])
+    ]
+    
+    # If nodocs is enabled, add doc file patterns to exclude
+    if config.get('nodocs'):
+        normal_excludes.extend(['**/*.txt', '**/*.md'])
     
     logging.debug(f"Include patterns: {include_patterns}")
-    logging.debug(f"Exclude patterns: {custom_excludes}")
+    logging.debug(f"Normal exclude patterns: {normal_excludes}")
+    logging.debug(f"Negated exclude patterns: {negated_excludes}")
     logging.debug(f"File extensions: {file_extensions}")
     
-    # Start with default exclude patterns
-    exclude_patterns = DEFAULT_EXCLUDE_PATTERNS.copy()
-    if custom_excludes:
-        if isinstance(custom_excludes, list):
-            exclude_patterns.extend(custom_excludes)
+    # Convert '.' to match everything
+    if '.' in include_patterns and not config.get('dirs_only'):
+        include_patterns = ['**/*']
     
-    # Add .gitignore patterns if .gitignore exists
-    gitignore_path = os.path.join(directory, '.gitignore')
-    if os.path.exists(gitignore_path):
-        try:
-            with open(gitignore_path, 'r') as f:
-                for line in f:
-                    line = line.strip()
-                    if not line or line.startswith('#'):
-                        continue
-                    if line.startswith('!'):
-                        # Handle negation patterns
-                        pattern = line[1:]  # Remove !
-                        if pattern.startswith('/'):
-                            pattern = pattern[1:]  # Remove leading slash
-                        exclude_patterns.append(f"!{pattern}")  # Keep the ! prefix
-                    else:
-                        if line.startswith('/'):
-                            line = line[1:]  # Remove leading slash
-                        exclude_patterns.append(line)
-        except Exception as e:
-            logging.warning(f"Failed to read .gitignore: {e}")
-    
-    logging.debug(f"Final exclude patterns: {exclude_patterns}")
-    
-    # Create gitignore spec for exclude patterns
+    # Create gitignore specs
     exclude_spec = pathspec.PathSpec.from_lines(
         pathspec.patterns.GitWildMatchPattern,
-        exclude_patterns if exclude_patterns else ['']  # Avoid empty list error
+        normal_excludes
     )
     
-    # Create include spec
+    negated_spec = pathspec.PathSpec.from_lines(
+        pathspec.patterns.GitWildMatchPattern,
+        negated_excludes
+    ) if negated_excludes else None
+
     include_spec = pathspec.PathSpec.from_lines(
         pathspec.patterns.GitWildMatchPattern,
         include_patterns
@@ -170,41 +169,67 @@ def get_files(directory: str, config: Dict = None, include_all: bool = False) ->
     
     # Get all files recursively
     all_files = []
-    for root, _, files in os.walk(directory, followlinks=True):
-        for file in files:
-            file_path = os.path.join(root, file)
+    for root, dirs, files in os.walk(directory, followlinks=True):
+        # If we're only processing directories and this is the root directory
+        if config.get('dirs_only'):
+            if root == directory:
+                # Only process directories, not files
+                for dir_name in dirs[:]:  # Create a copy to modify during iteration
+                    dir_path = os.path.join(root, dir_name)
+                    rel_path = os.path.relpath(dir_path, directory)
+                    
+                    # Skip if matches exclude patterns and not negated
+                    if exclude_spec.match_file(rel_path):
+                        if not negated_spec or not negated_spec.match_file(rel_path):
+                            logging.debug(f"Excluding directory {rel_path} due to exclude pattern")
+                            dirs.remove(dir_name)  # Remove from dirs list to prevent further traversal
+                            continue
+                        
+                    # Skip if doesn't match include patterns
+                    if not include_spec.match_file(rel_path):
+                        logging.debug(f"Excluding directory {rel_path} due to not matching include pattern")
+                        dirs.remove(dir_name)  # Remove from dirs list to prevent further traversal
+                        continue
+                    
+                    logging.debug(f"Including directory: {rel_path}")
+                    all_files.append(dir_path)  # Use dir_path directly to maintain correct path
+            # Don't process any more directories or files after the root level
+            break
             
-            # Skip broken symlinks
-            if os.path.islink(file_path) and not os.path.exists(file_path):
-                continue
+        # Normal file processing if not in directory-only mode
+        else:
+            for file in files:
+                file_path = os.path.join(root, file)
                 
-            rel_path = os.path.relpath(file_path, directory)
-            
-            # Skip if matches exclude patterns
-            if exclude_spec.match_file(rel_path):
-                # Find which pattern matched
-                matching_pattern = None
-                for pattern in exclude_patterns:
-                    if pathspec.patterns.GitWildMatchPattern(pattern).match_file(rel_path):
-                        matching_pattern = pattern
-                        break
-                logging.debug(f"Excluding {rel_path} due to exclude pattern: {matching_pattern}")
-                continue
-                
-            # Skip if doesn't match include patterns
-            if not include_spec.match_file(rel_path):
-                logging.debug(f"Excluding {rel_path} due to not matching include pattern")
-                continue
-                
-            # Check file extension if not including all files
-            if file_extensions:
-                ext = os.path.splitext(file)[1].lower()
-                if not ext or ext not in file_extensions:
-                    logging.debug(f"Excluding {rel_path} due to file extension {ext}")
+                # Skip broken symlinks
+                if os.path.islink(file_path) and not os.path.exists(file_path):
                     continue
-            
-            logging.debug(f"Including file: {rel_path}")
-            all_files.append(os.path.abspath(file_path))  # Store absolute path
+                    
+                rel_path = os.path.relpath(file_path, directory)
+                
+                # Skip if matches exclude patterns and not negated
+                if exclude_spec.match_file(rel_path):
+                    if not negated_spec or not negated_spec.match_file(rel_path):
+                        logging.debug(f"Excluding {rel_path} due to exclude pattern")
+                        continue
+                    
+                # Skip if doesn't match include patterns
+                if not include_spec.match_file(rel_path):
+                    logging.debug(f"Excluding {rel_path} due to not matching include pattern")
+                    continue
+                    
+                # Check file extension if not including all files
+                if file_extensions:
+                    file_ext = os.path.splitext(file)[1].lower()
+                    if not file_ext:
+                        logging.debug(f"Excluding {rel_path} due to no extension")
+                        continue
+                    if not any(file_ext == ext.lower() for ext in file_extensions):
+                        logging.debug(f"Excluding {rel_path} due to file extension {file_ext}")
+                        continue
+                
+                logging.debug(f"Including file: {rel_path}")
+                all_files.append(file_path)  # Use file_path directly to maintain correct path
     
     return sorted(all_files)
 
@@ -513,45 +538,63 @@ def get_extractor_for_ext(ext: str) -> Optional[OutlineExtractor]:
     }
     return extractors.get(ext.lower())
 
-def write_output(content, config):
-    """Write output to clipboard and/or file."""
+def write_output(content: str, config: Dict) -> None:
+    """Write output to file or clipboard.
+    
+    Args:
+        content: Content to write
+        config: Configuration options
+    """
+    if not content:
+        return
+        
     # Check content size
     content_size = len(content)
-    chunk_size = config.get('chunkSize', 90000)
-    
+    chunk_size = config.get('chunkSize', DEFAULT_CHUNK_SIZE)
     if content_size > chunk_size:
         print(f"\nWarning: Content size ({content_size} characters) exceeds the maximum size ({chunk_size} characters).")
-    
-    # Write to file if specified
+        
+    # Handle file output
     if config.get('outputFile'):
-        output_file = config['outputFile']
+        filename = config['outputFile']
+        if isinstance(filename, str):
+            # Handle directory variables in filename
+            if config.get('dirs_only'):
+                # Get the first directory from the files list
+                if config.get('files'):
+                    first_dir = os.path.basename(config['files'][0])
+                    # Replace {dir} with the directory name
+                    filename = filename.replace('{dir}', first_dir)
+        else:
+            filename = 'output-cpai.md'
+            
         try:
-            with open(output_file, 'w', encoding='utf-8') as f:
+            with open(filename, 'w') as f:
                 f.write(content)
-            logging.info(f"Content written to {output_file}")
+            logging.info(f"Output written to {filename}")
         except Exception as e:
-            logging.error(f"Failed to write to file: {e}")
-    
-    # Copy to clipboard if enabled
-    if config.get('usePastebin', True) and not config.get('stdout'):
+            logging.error(f"Failed to write to file {filename}: {e}")
+            return
+    # Handle stdout
+    elif config.get('stdout'):
+        print(content)
+    # Handle clipboard
+    elif config.get('usePastebin', True):
         try:
+            # Use pbcopy on macOS
             process = subprocess.Popen(['pbcopy'], stdin=subprocess.PIPE)
             process.communicate(content.encode('utf-8'))
-            if process.returncode != 0:
-                logging.error(f"Failed to copy to clipboard: Command returned non-zero exit status {process.returncode}")
-                return
-            if config.get('tree'):
-                logging.info("✨ File and function tree copied to clipboard!")
+            if process.returncode == 0:
+                logging.info("Output copied to clipboard")
             else:
-                logging.info("Content copied to clipboard")
+                logging.error(f"Failed to copy to clipboard: Command returned non-zero exit status {process.returncode}")
         except subprocess.CalledProcessError as e:
             logging.error(f"Failed to copy to clipboard: {str(e).rstrip('.')}")
         except UnicodeEncodeError as e:
             logging.error(f"Failed to copy to clipboard: {e}")
         except Exception as e:
             logging.error(f"Failed to copy to clipboard: {e}")
-    elif config.get('stdout'):
-        print(content)
+            return
 
 def should_process_file(file_path: str, config: Dict) -> bool:
     """Check if a file should be processed based on configuration.
@@ -824,6 +867,8 @@ def main():
     parser.add_argument('-x', '--exclude', nargs='+', help="Additional patterns to exclude")
     parser.add_argument('--debug', action='store_true', help="Enable debug logging")
     parser.add_argument('--tree', action='store_true', help="Display a tree view of the directory structure")
+    parser.add_argument('--dirs', action='store_true', help="Select only directories in the current path")
+    parser.add_argument('--nodocs', action='store_true', help="Exclude all files ending in txt and md")
 
     try:
         args = parser.parse_args()
@@ -835,7 +880,9 @@ def main():
             'include_all': args.all,
             'exclude': args.exclude,
             'tree': args.tree,
-            'stdout': args.stdout
+            'stdout': args.stdout,
+            'dirs_only': args.dirs,
+            'nodocs': args.nodocs
         }
 
         logging.debug("Starting main function")
