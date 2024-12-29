@@ -126,14 +126,14 @@ def get_files(directory: str, config: Dict = None, include_all: bool = False) ->
     
     # Only add default excludes if not including all files and no excludes specified
     # Also skip default excludes if specific file extensions are requested
-    if not include_all and not config.get('exclude') and not config.get('fileExtensions'):
-        normal_excludes = DEFAULT_EXCLUDE_PATTERNS.copy()
+    if not include_all and not config.get('exclude'):
+        exclude_patterns = DEFAULT_EXCLUDE_PATTERNS.copy()
     else:
-        normal_excludes = config.get('exclude', [])
+        exclude_patterns = config.get('exclude', [])
     
     # Split exclude patterns into normal and negated patterns
-    normal_excludes = [p for p in (normal_excludes or []) if not p.startswith('!')]
-    negated_excludes = [p[1:] for p in (normal_excludes or []) if p.startswith('!')]
+    normal_excludes = [p for p in (exclude_patterns or []) if not p.startswith('!')]
+    negated_excludes = [p[1:] for p in (exclude_patterns or []) if p.startswith('!')]
     
     # Normalize file extensions to always start with a dot
     file_extensions = [] if include_all else [
@@ -219,41 +219,38 @@ def get_files(directory: str, config: Dict = None, include_all: bool = False) ->
                     
                 rel_path = os.path.relpath(file_path, directory)
                 
-                # Skip if matches gitignore
-                if gitignore_spec and gitignore_spec.match_file(rel_path):
-                    continue
-                
                 # Check includes first - if included, skip exclude checks
                 if not include_spec.match_file(rel_path):
                     logging.debug(f"Excluding {rel_path} due to not matching include pattern")
                     continue
+
+                # Check if file is negated (should be included despite being excluded)
+                if negated_spec and negated_spec.match_file(rel_path):
+                    all_files.append(rel_path)
+                    continue
+
+                # Skip if matches gitignore
+                if gitignore_spec and gitignore_spec.match_file(rel_path):
+                    continue
                 
-                # Then check excludes
+                # Check excludes
                 if exclude_spec.match_file(rel_path):
-                    if not negated_spec or not negated_spec.match_file(rel_path):
-                        logging.debug(f"Excluding {rel_path} due to exclude pattern")
-                        continue
-                
-                # Check file extension if not including all files
-                if file_extensions:
-                    file_ext = os.path.splitext(file)[1].lower()
-                    if not file_ext:
-                        logging.debug(f"Excluding {rel_path} due to no extension")
-                        continue
-                    if not any(file_ext == ext.lower() for ext in file_extensions):
-                        logging.debug(f"Excluding {rel_path} due to file extension {file_ext}")
-                        continue
-                
+                    continue
+
+                # Check file extensions if specified
+                if file_extensions and not any(rel_path.endswith(ext) for ext in file_extensions):
+                    continue
+
                 # Store path based on input path type and test context
                 if 'exclude' in config and config['exclude'] == DEFAULT_EXCLUDE_PATTERNS:
                     # For exclude pattern tests, always return relative paths
                     all_files.append(rel_path)
-                elif os.path.isabs(directory):
-                    # For absolute path input, return absolute paths
+                elif os.path.isabs(directory) or os.path.normpath(directory) != '.':
+                    # For absolute paths or paths outside current directory, return absolute paths
                     all_files.append(os.path.abspath(file_path))
                 else:
-                    # For relative path input, return absolute paths
-                    all_files.append(os.path.abspath(file_path))
+                    # For paths in current directory, return relative paths
+                    all_files.append(rel_path)
     
     return sorted(all_files)
 
