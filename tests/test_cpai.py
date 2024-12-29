@@ -238,6 +238,7 @@ class TestCPAI(unittest.TestCase):
 
             config = {
                 'include': ['.'],
+                'exclude': [],  # Explicitly disable default excludes
                 'fileExtensions': ['.json']  # Only look for JSON files
             }
 
