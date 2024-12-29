@@ -119,16 +119,32 @@ def get_files(directory: str, config: Dict = None, include_all: bool = False) ->
     # Get patterns from config
     include_patterns = config.get('include', ['.'])
     
+    # Initialize exclude patterns
+    if 'exclude' not in config or config['exclude'] is None:
+        config['exclude'] = []
+    
     # If nodocs => add excludes for docs directory and doc files
     if config.get('nodocs'):
-        config.setdefault('exclude', [])
         config['exclude'].extend(['**/*.txt', '**/*.md', '**/docs/**', '**/documentation/**', 'docs'])
     
+    # Add common excludes for build/cache directories
+    config['exclude'].extend([
+        '.venv/**',
+        'venv/**',
+        'node_modules/**',
+        '.git/**',
+        '.pytest_cache/**',
+        '__pycache__/**',
+        'build/**',
+        'dist/**',
+        '*.egg-info/**'
+    ])
+    
     # Only add default excludes if not including all files and no excludes specified
-    if not include_all and 'exclude' not in config:
+    if not include_all and not config['exclude']:
         exclude_patterns = DEFAULT_EXCLUDE_PATTERNS.copy()
     else:
-        exclude_patterns = config.get('exclude', [])
+        exclude_patterns = config['exclude']
     
     # Split exclude patterns into normal and negated patterns
     normal_excludes = [p for p in (exclude_patterns or []) if not p.startswith('!')]
@@ -187,7 +203,7 @@ def get_files(directory: str, config: Dict = None, include_all: bool = False) ->
             keep_dirs = []
             for d in dirs:
                 # Skip special directories
-                if d in ['main', '__pycache__', 'node_modules', '.git', '.pytest_cache']:
+                if d in ['main', '__pycache__', 'node_modules', '.git', '.pytest_cache', '.venv', 'venv', 'build', 'dist']:
                     continue
                 
                 # Skip docs directory if nodocs is set
@@ -212,12 +228,25 @@ def get_files(directory: str, config: Dict = None, include_all: bool = False) ->
                     and (not negated_spec or not negated_spec.match_file(rel_path))
                     and os.path.isdir(dir_path)):  # Ensure it's actually a directory
                     keep_dirs.append(d)
-                    # Only add directories that are direct children of the search directory
-                    if os.path.dirname(rel_path) == '':
-                        # Store the absolute path so os.path.isdir() works
-                        abs_path = os.path.abspath(dir_path)
+                    # Add all directories in the path
+                    abs_path = os.path.abspath(dir_path)
+                    # Add the directory and its subdirectories
+                    if os.path.dirname(abs_path) == os.path.abspath(directory):
                         all_files.append(abs_path)
                         logging.debug(f"Added directory {abs_path}")
+                        # Get subdirectories
+                        for subroot, subdirs, _ in os.walk(dir_path):
+                            for subdir in subdirs:
+                                subdir_path = os.path.join(subroot, subdir)
+                                rel_subdir_path = os.path.relpath(subdir_path, abs_path)
+                                # Skip if matches exclude patterns
+                                if exclude_spec.match_file(rel_subdir_path):
+                                    logging.debug(f"Excluding subdirectory {rel_subdir_path} due to exclude pattern")
+                                    continue
+                                # Add subdirectory
+                                abs_subdir_path = os.path.abspath(subdir_path)
+                                all_files.append(abs_subdir_path)
+                                logging.debug(f"Added subdirectory {abs_subdir_path}")
             
             dirs[:] = keep_dirs  # Replace in-place so deeper recursion can happen
             files[:] = []        # Skip all files
@@ -639,13 +668,24 @@ def write_output(content: str, config: Dict) -> None:
                     if dir_name == '.':
                         dir_name = os.path.basename(os.path.abspath('.'))
                     
-                    # Create directory-specific content
-                    dir_content = format_tree([file_path])
-                    if dir_content.strip():
-                        output_file = filename.replace('{dir}', dir_name)
-                        with open(output_file, 'w') as f:
-                            f.write(f"```\n{dir_content}\n```")
-                        logging.info(f"Output written to {output_file}")
+                    # Get files for this directory
+                    dir_files = []
+                    for f in config.get('files', []):
+                        try:
+                            if os.path.commonpath([f, file_path]) == os.path.abspath(file_path):
+                                dir_files.append(f)
+                        except ValueError:
+                            # Skip if files are on different drives
+                            continue
+                    
+                    if dir_files:
+                        # Create directory-specific content
+                        dir_content = format_tree(dir_files)
+                        if dir_content.strip():
+                            output_file = filename.replace('{dir}', dir_name)
+                            with open(output_file, 'w') as f:
+                                f.write(f"```\n{dir_content}\n```")
+                            logging.info(f"Output written to {output_file}")
         else:
             with open(filename, 'w') as f:
                 f.write(content)
@@ -692,6 +732,25 @@ def should_process_file(file_path: str, config: Dict) -> bool:
     if not os.path.exists(file_path):
         logging.debug(f"File does not exist: {file_path}")
         return False
+
+    # If we're in dirs_only mode, only process directories
+    if config.get('dirs_only'):
+        if not os.path.isdir(file_path):
+            logging.debug(f"Excluded by not being a directory: {file_path}")
+            return False
+        
+        # Skip special directories
+        dir_name = os.path.basename(file_path)
+        if dir_name in ['main', '__pycache__', 'node_modules', '.git', '.pytest_cache', '.venv', 'venv', 'build', 'dist']:
+            logging.debug(f"Excluded by being a special directory: {file_path}")
+            return False
+        
+        # Skip docs directory if nodocs is set
+        if config.get('nodocs') and dir_name == 'docs':
+            logging.debug(f"Excluded by being a docs directory: {file_path}")
+            return False
+        
+        return True
 
     # Get file extension
     _, ext = os.path.splitext(file_path)
@@ -755,11 +814,18 @@ def format_tree(files: List[str]) -> str:
         
     # Convert absolute paths to relative paths
     cwd = os.getcwd()
-    rel_files = [os.path.relpath(f, cwd).replace(os.sep, '/') for f in files]
+    rel_files = []
+    for f in files:
+        try:
+            rel_path = os.path.relpath(f, cwd).replace(os.sep, '/')
+            rel_files.append(rel_path)
+        except ValueError:
+            # Skip if files are on different drives
+            continue
     
     # Build tree structure
     tree = {}
-    for file_path in rel_files:
+    for file_path in sorted(rel_files):
         current = tree
         parts = file_path.split('/')
         for part in parts:  # Process all parts including the last one
@@ -932,27 +998,35 @@ def cpai(args, cli_options):
     if not processed_files:
         if config.get('dirs_only') and config.get('tree'):
             # In dirs_only tree mode, we still want to show the directory structure
-            content = format_tree(all_files)
-            if content:
-                # If we're using directory-specific output files
-                if config.get('outputFile') and '{dir}' in config['outputFile']:
-                    # Create a separate file for each directory
-                    for directory in target_dirs:
-                        dir_name = os.path.basename(directory)
-                        # Handle the case where dir_name is '.'
-                        if dir_name == '.':
-                            dir_name = os.path.basename(os.path.abspath('.'))
-                        # Get files for this directory
-                        dir_files = [f for f in all_files if f.startswith(directory)]
-                        if dir_files:
-                            # Create directory-specific content
-                            dir_content = format_tree(dir_files)
-                            if dir_content.strip():
-                                output_file = config['outputFile'].replace('{dir}', dir_name)
-                                with open(output_file, 'w') as f:
-                                    f.write(f"```\n{dir_content}\n```")
-                                logging.info(f"Output written to {output_file}")
-                else:
+            # If we're using directory-specific output files
+            if config.get('outputFile') and '{dir}' in config['outputFile']:
+                # Create a separate file for each directory
+                for directory in target_dirs:
+                    dir_name = os.path.basename(directory)
+                    # Handle the case where dir_name is '.'
+                    if dir_name == '.':
+                        dir_name = os.path.basename(os.path.abspath('.'))
+                    # Get files for this directory and its subdirectories
+                    dir_files = []
+                    for f in all_files:
+                        try:
+                            if os.path.commonpath([f, directory]) == os.path.abspath(directory):
+                                dir_files.append(f)
+                        except ValueError:
+                            # Skip if files are on different drives
+                            continue
+                    if dir_files:
+                        # Create directory-specific content
+                        dir_content = format_tree(dir_files)
+                        if dir_content.strip():
+                            output_file = config['outputFile'].replace('{dir}', dir_name)
+                            with open(output_file, 'w') as f:
+                                f.write(f"```\n{dir_content}\n```")
+                            logging.info(f"Output written to {output_file}")
+                return ""  # Return empty string since we've written the files directly
+            else:
+                content = format_tree(all_files)
+                if content:
                     write_output(f"```\n{content}\n```", config)
                 return f"```\n{content}\n```"  # Return formatted content
         else:
