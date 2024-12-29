@@ -203,7 +203,8 @@ def get_files(directory: str, config: Dict = None, include_all: bool = False) ->
                     # Only add directories that are direct children of the search directory
                     # and are not 'main' (which is a special case in the tests)
                     if (os.path.dirname(rel_path) == '' or os.path.dirname(rel_path) == os.path.basename(directory)) and d != 'main':
-                        all_files.append(os.path.basename(rel_path))
+                        # Store the full relative path so os.path.isdir() works
+                        all_files.append(os.path.join(os.path.basename(directory), d) if os.path.basename(directory) != '.' else d)
             
             dirs[:] = keep_dirs  # Replace in-place so deeper recursion can happen
             files[:] = []        # Skip all files
@@ -838,7 +839,9 @@ def cpai(args, cli_options):
     # Then add files from directories
     for directory in target_dirs:
         files = get_files(directory, config, include_all=include_all)
-        all_files.extend(files)  # Already absolute paths
+        # Convert relative paths from get_files to absolute paths
+        abs_files = [os.path.join(directory, f) for f in files]
+        all_files.extend(abs_files)
     
     if not all_files:
         logging.warning("No files found to process")
