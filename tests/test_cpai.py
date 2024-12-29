@@ -657,5 +657,127 @@ class TestCPAI(unittest.TestCase):
             if os.path.exists(file_name):
                 os.remove(file_name)
 
+    def test_directory_specific_output_files(self):
+        """Test that separate output files are created for each directory when using {dir} template."""
+        # Create test directories and files
+        os.makedirs('src/components', exist_ok=True)
+        os.makedirs('src/utils', exist_ok=True)
+        os.makedirs('lib/core', exist_ok=True)
+        
+        with open('src/components/Button.js', 'w') as f:
+            f.write('export function Button() { return null; }')
+        with open('src/utils/format.js', 'w') as f:
+            f.write('export function format() { return ""; }')
+        with open('lib/core/main.js', 'w') as f:
+            f.write('export function main() { return 0; }')
+        
+        try:
+            cli_options = {
+                'dirs_only': True,
+                'outputFile': '{dir}.tree.md',
+                'tree': True,
+                'include': ['.'],
+                'fileExtensions': ['.js']
+            }
+            
+            # Process directories
+            cpai(['src', 'lib'], cli_options)
+            
+            # Verify output files were created
+            self.assertTrue(os.path.exists('src.tree.md'))
+            self.assertTrue(os.path.exists('lib.tree.md'))
+            
+            # Verify content - in dirs_only mode, we only show directories
+            with open('src.tree.md', 'r') as f:
+                src_content = f.read()
+                self.assertIn('components', src_content)
+                self.assertIn('utils', src_content)
+                self.assertNotIn('core', src_content)
+            
+            with open('lib.tree.md', 'r') as f:
+                lib_content = f.read()
+                self.assertIn('core', lib_content)
+                self.assertNotIn('components', lib_content)
+                self.assertNotIn('utils', lib_content)
+        finally:
+            # Clean up
+            for file in ['src.tree.md', 'lib.tree.md']:
+                if os.path.exists(file):
+                    os.remove(file)
+            shutil.rmtree('src')
+            shutil.rmtree('lib')
+
+    def test_tree_structure_formatting(self):
+        """Test that the tree structure is properly formatted in dirs_only mode."""
+        # Create test directories
+        os.makedirs('src/components/ui', exist_ok=True)
+        os.makedirs('src/utils/format', exist_ok=True)
+        os.makedirs('lib/core/utils', exist_ok=True)
+        
+        try:
+            cli_options = {
+                'dirs_only': True,
+                'tree': True,
+                'include': ['.']
+            }
+            
+            # Process directories
+            result = cpai(['src', 'lib'], cli_options)
+            
+            # Verify tree structure formatting
+            self.assertIn('```', result)
+            self.assertIn('    .', result)
+            self.assertIn('    ├── lib', result)
+            self.assertIn('    │   └── core', result)
+            self.assertIn('    │       └── utils', result)
+            self.assertIn('    └── src', result)
+            self.assertIn('        ├── components', result)
+            self.assertIn('        │   └── ui', result)
+            self.assertIn('        └── utils', result)
+            self.assertIn('            └── format', result)
+            
+        finally:
+            # Clean up
+            shutil.rmtree('src')
+            shutil.rmtree('lib')
+
+    def test_none_value_handling(self):
+        """Test that None values are handled gracefully when processing files."""
+        # Create test directory structure
+        os.makedirs('src', exist_ok=True)
+        os.makedirs('docs', exist_ok=True)
+        
+        try:
+            # Create test files
+            with open('src/test.py', 'w') as f:
+                f.write('def test():\n    pass\n')
+            with open('docs/README.md', 'w') as f:
+                f.write('# Test\n')
+            
+            cli_options = {
+                'outputFile': False,
+                'usePastebin': False,
+                'dirs_only': True,  # This should trigger directory processing
+                'nodocs': True,     # This should exclude docs
+                'tree': True        # This should trigger tree view
+            }
+            
+            # Process files - this should not raise any NoneType errors
+            result = cpai(['.'], cli_options)
+            
+            # Verify we got a result
+            self.assertIsNotNone(result)
+            
+            # Verify docs directory was excluded
+            self.assertNotIn('docs', result)
+            
+            # Verify src directory was included
+            self.assertIn('src', result)
+            
+        finally:
+            # Clean up
+            shutil.rmtree('src')
+            shutil.rmtree('docs')
+
 if __name__ == '__main__':
     unittest.main()

@@ -18,12 +18,13 @@ cpai [options] [file|directory...]
 
 Options:
 - `--tree` or `-t`: Generate a file and function tree
-- `-f [FILENAME], --file [FILENAME]`: Output to file. If FILENAME is not provided, defaults to 'output-cpai.md'
+- `-f [FILENAME], --file [FILENAME]`: Output to file. If FILENAME is not provided, defaults to 'output-cpai.md' (Can take a directory name to create a separate output file for each directory using {dir} in the filename, eg 'output-{dir}.md')
 - `-n, --noclipboard`: Don't copy to clipboard
 - `--stdout`: Output to stdout instead of clipboard
 - `-a, --all`: Include all files (including tests, configs, etc.)
 - `-c, --configs`: Include configuration files
 - `-x PATTERN [PATTERN...], --exclude PATTERN [PATTERN...]`: Additional patterns to exclude
+- `--dirs`: Select only directories (not files) in the target path(s). When combined with --file, creates separate output files for each directory using {dir} in the filename
 
 If no files or directories are specified, cpai will process all supported files in the current directory.
 

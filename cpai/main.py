@@ -122,7 +122,7 @@ def get_files(directory: str, config: Dict = None, include_all: bool = False) ->
     # If nodocs => add excludes for docs directory and doc files
     if config.get('nodocs'):
         config.setdefault('exclude', [])
-        config['exclude'].extend(['**/*.txt', '**/*.md', '**/docs/**', '**/documentation/**'])
+        config['exclude'].extend(['**/*.txt', '**/*.md', '**/docs/**', '**/documentation/**', 'docs'])
     
     # Only add default excludes if not including all files and no excludes specified
     if not include_all and 'exclude' not in config:
@@ -186,28 +186,41 @@ def get_files(directory: str, config: Dict = None, include_all: bool = False) ->
             # Filter directories in-place to allow recursion
             keep_dirs = []
             for d in dirs:
+                # Skip special directories
+                if d in ['main', '__pycache__', 'node_modules', '.git', '.pytest_cache']:
+                    continue
+                
+                # Skip docs directory if nodocs is set
+                if config.get('nodocs') and d == 'docs':
+                    continue
+                
                 dir_path = os.path.join(root, d)
                 rel_path = os.path.relpath(dir_path, directory)
                 
                 # Skip if matches gitignore
                 if gitignore_spec and gitignore_spec.match_file(rel_path):
+                    logging.debug(f"Excluding directory {rel_path} due to gitignore pattern")
+                    continue
+                
+                # Skip if matches exclude patterns
+                if exclude_spec.match_file(rel_path):
+                    logging.debug(f"Excluding directory {rel_path} due to exclude pattern")
                     continue
                 
                 # Only keep directories that pass excludes/includes
-                if (not exclude_spec.match_file(rel_path)
-                    and include_spec.match_file(rel_path)
+                if (include_spec.match_file(rel_path)
                     and (not negated_spec or not negated_spec.match_file(rel_path))
                     and os.path.isdir(dir_path)):  # Ensure it's actually a directory
                     keep_dirs.append(d)
                     # Only add directories that are direct children of the search directory
-                    # and are not 'main' (which is a special case in the tests)
-                    if (os.path.dirname(rel_path) == '' or os.path.dirname(rel_path) == os.path.basename(directory)) and d != 'main':
-                        # Store the full relative path so os.path.isdir() works
-                        all_files.append(os.path.join(os.path.basename(directory), d) if os.path.basename(directory) != '.' else d)
+                    if os.path.dirname(rel_path) == '':
+                        # Store the absolute path so os.path.isdir() works
+                        abs_path = os.path.abspath(dir_path)
+                        all_files.append(abs_path)
+                        logging.debug(f"Added directory {abs_path}")
             
             dirs[:] = keep_dirs  # Replace in-place so deeper recursion can happen
             files[:] = []        # Skip all files
-            # No continue - allow recursion
         else:
             for file in files:
                 file_path = os.path.join(root, file)
@@ -279,11 +292,20 @@ def extract_outline(file_path):
 def process_file(file_path: str, options: Dict[str, Any]) -> Dict[str, Any]:
     """Process a single file and return its content and outline."""
     try:
+        # Handle directories in tree mode
+        if options.get('dirs_only') and os.path.isdir(file_path):
+            # For directories, we only need the outline
+            if options.get('tree'):
+                # Get all files in the directory
+                dir_files = get_files(file_path, options)
+                # Return empty outline instead of None if no files
+                return {'outline': [], 'is_directory': True}
+            
         # In tree mode, we only need the outline
         if options.get('tree'):
             outline = extract_outline(file_path)
             # Return empty outline instead of None if extraction fails
-            return {'outline': outline or []}
+            return {'outline': outline or [], 'is_directory': False}
             
         # For regular mode, get both content and outline
         with open(file_path, 'r', encoding='utf-8') as f:
@@ -292,12 +314,13 @@ def process_file(file_path: str, options: Dict[str, Any]) -> Dict[str, Any]:
         outline = extract_outline(file_path)
         return {
             'content': content,
-            'outline': outline or []  # Return empty list instead of None
+            'outline': outline or [],  # Return empty list instead of None
+            'is_directory': False
         }
         
     except Exception as e:
         logging.error(f"Failed to read file {file_path}: {e}")
-        return {'outline': []} if options.get('tree') else None  # Return empty outline in tree mode
+        return {'outline': [], 'is_directory': os.path.isdir(file_path)} if options.get('tree') else None  # Return empty outline in tree mode
 
 def format_functions_as_tree(functions: List[FunctionInfo], indent: str = '', extractor: Optional[OutlineExtractor] = None) -> str:
     """Format a list of functions as a tree structure.
@@ -473,8 +496,17 @@ def format_content(files: Dict[str, Dict], options: Dict) -> str:
     
     # If in tree mode, just output the tree structure
     if options.get('tree'):
-        tree = build_tree_structure(rel_files)
-        return format_tree_with_outlines(tree)
+        # If in dirs_only mode, we only show directories
+        if options.get('dirs_only'):
+            # Filter to only include directories
+            dir_files = {k: v for k, v in rel_files.items() if v.get('is_directory', False)}
+            if not dir_files:
+                return ""  # Return empty string if no directories
+            tree = build_tree_structure(dir_files)
+            return format_tree_with_outlines(tree)
+        else:
+            tree = build_tree_structure(rel_files)
+            return format_tree_with_outlines(tree)
     
     # Add tree outline at the top
     tree = build_tree_structure(rel_files)
@@ -484,6 +516,10 @@ def format_content(files: Dict[str, Dict], options: Dict) -> str:
     
     # Format each file's content
     for file_path, file_info in sorted(rel_files.items()):
+        # Skip directories in regular mode
+        if file_info.get('is_directory', False):
+            continue
+            
         # Get language from file extension
         ext = os.path.splitext(file_path)[1].lower()
         language = get_language_from_ext(ext)
@@ -584,24 +620,36 @@ def write_output(content: str, config: Dict) -> None:
     # Handle file output
     if config.get('outputFile'):
         filename = config['outputFile']
-        if isinstance(filename, str):
-            # Handle directory variables in filename
-            if config.get('dirs_only'):
-                # Get the first directory from the files list
-                if config.get('files'):
-                    first_dir = os.path.basename(config['files'][0])
-                    # Replace {dir} with the directory name
-                    filename = filename.replace('{dir}', first_dir)
-        else:
+        if isinstance(filename, bool):
             filename = 'output-cpai.md'
-            
-        try:
+        
+        # Handle directory variable in filename
+        if '{dir}' in filename and config.get('dirs_only'):
+            # Get the directory name from each file
+            processed_dirs = set()
+            for file_path in config.get('files', []):
+                if os.path.isdir(file_path):
+                    dir_name = os.path.basename(file_path)
+                    # Skip if we've already processed this directory
+                    if dir_name in processed_dirs:
+                        continue
+                    processed_dirs.add(dir_name)
+                    
+                    # Handle the case where dir_name is '.'
+                    if dir_name == '.':
+                        dir_name = os.path.basename(os.path.abspath('.'))
+                    
+                    # Create directory-specific content
+                    dir_content = format_tree([file_path])
+                    if dir_content.strip():
+                        output_file = filename.replace('{dir}', dir_name)
+                        with open(output_file, 'w') as f:
+                            f.write(f"```\n{dir_content}\n```")
+                        logging.info(f"Output written to {output_file}")
+        else:
             with open(filename, 'w') as f:
                 f.write(content)
             logging.info(f"Output written to {filename}")
-        except Exception as e:
-            logging.error(f"Failed to write to file {filename}: {e}")
-            return
     # Handle stdout
     elif config.get('stdout'):
         print(content)
@@ -714,14 +762,13 @@ def format_tree(files: List[str]) -> str:
     for file_path in rel_files:
         current = tree
         parts = file_path.split('/')
-        for part in parts[:-1]:  # Process directories
+        for part in parts:  # Process all parts including the last one
             if part not in current:
                 current[part] = {}
             current = current[part]
-        current[parts[-1]] = None  # Add file as leaf node
     
     # Convert tree to string
-    return format_tree_string(tree).rstrip()
+    return "    .\n" + format_tree_string(tree, "    ", True).rstrip()
 
 def format_tree_string(tree: Dict, prefix: str = '', is_last: bool = True) -> str:
     """Format a tree dictionary into a string representation.
@@ -738,16 +785,20 @@ def format_tree_string(tree: Dict, prefix: str = '', is_last: bool = True) -> st
         return ''
 
     output = []
-    items = list(tree.items())
+    items = sorted(tree.items())  # Sort items to ensure consistent order
 
     for i, (name, subtree) in enumerate(items):
         is_last_item = i == len(items) - 1
         connector = '└── ' if is_last_item else '├── '
         new_prefix = prefix + ('    ' if is_last_item else '│   ')
 
-        output.append(prefix + connector + name)
-        if subtree is not None:  # If it's a directory
-            output.append(format_tree_string(subtree, new_prefix, is_last_item))
+        # Skip the root directory if it's '.'
+        if name != '.':
+            output.append(prefix + connector + name)
+            if subtree:  # If it's a directory with contents
+                subtree_str = format_tree_string(subtree, new_prefix, is_last_item)
+                if subtree_str:
+                    output.append(subtree_str)
 
     return '\n'.join(filter(None, output))
 
@@ -850,18 +901,19 @@ def cpai(args, cli_options):
     # Then add files from directories
     for directory in target_dirs:
         files = get_files(directory, config, include_all=include_all)
-        # Convert relative paths to absolute paths if needed
-        abs_files = []
-        for f in files:
-            if os.path.isabs(f):
-                abs_files.append(f)
-            else:
-                abs_files.append(os.path.join(directory, f))
-        all_files.extend(abs_files)
+        if files:  # Only extend if we got files back
+            # Convert relative paths to absolute paths if needed
+            abs_files = []
+            for f in files:
+                if os.path.isabs(f):
+                    abs_files.append(f)
+                else:
+                    abs_files.append(os.path.join(directory, f))
+            all_files.extend(abs_files)
     
     if not all_files:
         logging.warning("No files found to process")
-        return
+        return ""  # Return empty string instead of None
     
     # Add files to config for reference
     config['files'] = all_files
@@ -878,8 +930,37 @@ def cpai(args, cli_options):
                 logging.error(f"Error processing {file_path}: {e}")
     
     if not processed_files:
-        logging.warning("No files processed successfully")
-        return
+        if config.get('dirs_only') and config.get('tree'):
+            # In dirs_only tree mode, we still want to show the directory structure
+            content = format_tree(all_files)
+            if content:
+                # If we're using directory-specific output files
+                if config.get('outputFile') and '{dir}' in config['outputFile']:
+                    # Create a separate file for each directory
+                    for directory in target_dirs:
+                        dir_name = os.path.basename(directory)
+                        # Handle the case where dir_name is '.'
+                        if dir_name == '.':
+                            dir_name = os.path.basename(os.path.abspath('.'))
+                        # Get files for this directory
+                        dir_files = [f for f in all_files if f.startswith(directory)]
+                        if dir_files:
+                            # Create directory-specific content
+                            dir_content = format_tree(dir_files)
+                            if dir_content.strip():
+                                output_file = config['outputFile'].replace('{dir}', dir_name)
+                                with open(output_file, 'w') as f:
+                                    f.write(f"```\n{dir_content}\n```")
+                                logging.info(f"Output written to {output_file}")
+                else:
+                    write_output(f"```\n{content}\n```", config)
+                return f"```\n{content}\n```"  # Return formatted content
+        else:
+            logging.warning("No files processed successfully")
+            return ""  # Return empty string instead of None
+    
+    # Store processed files in config for use by write_output
+    config['processed_files'] = processed_files
     
     # Format the content
     content = format_content(processed_files, config)
