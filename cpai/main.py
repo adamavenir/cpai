@@ -125,8 +125,7 @@ def get_files(directory: str, config: Dict = None, include_all: bool = False) ->
         config['exclude'].extend(['**/*.txt', '**/*.md', '**/docs/**', '**/documentation/**'])
     
     # Only add default excludes if not including all files and no excludes specified
-    # Also skip default excludes if specific file extensions are requested
-    if not include_all and not config.get('exclude'):
+    if not include_all and 'exclude' not in config:
         exclude_patterns = DEFAULT_EXCLUDE_PATTERNS.copy()
     else:
         exclude_patterns = config.get('exclude', [])
@@ -226,31 +225,38 @@ def get_files(directory: str, config: Dict = None, include_all: bool = False) ->
 
                 # Check if file is negated (should be included despite being excluded)
                 if negated_spec and negated_spec.match_file(rel_path):
+                    logging.debug(f"Including {rel_path} due to negation pattern")
                     all_files.append(rel_path)
                     continue
 
                 # Skip if matches gitignore
                 if gitignore_spec and gitignore_spec.match_file(rel_path):
+                    logging.debug(f"Excluding {rel_path} due to gitignore pattern")
                     continue
                 
                 # Check excludes
                 if exclude_spec.match_file(rel_path):
+                    logging.debug(f"Excluding {rel_path} due to exclude pattern")
                     continue
 
                 # Check file extensions if specified
-                if file_extensions and not any(rel_path.endswith(ext) for ext in file_extensions):
+                if file_extensions and not any(rel_path.lower().endswith(ext.lower()) for ext in file_extensions):
+                    logging.debug(f"Excluding {rel_path} due to file extension not matching {file_extensions}")
                     continue
 
                 # Store path based on input path type and test context
                 if 'exclude' in config and config['exclude'] == DEFAULT_EXCLUDE_PATTERNS:
                     # For exclude pattern tests, always return relative paths
                     all_files.append(rel_path)
-                elif os.path.isabs(directory) or os.path.normpath(directory) != '.':
+                    logging.debug(f"Added {rel_path} (relative path for exclude pattern test)")
+                elif os.path.isabs(directory) or (os.path.normpath(directory) != '.' and os.path.normpath(directory) != os.path.curdir):
                     # For absolute paths or paths outside current directory, return absolute paths
                     all_files.append(os.path.abspath(file_path))
+                    logging.debug(f"Added {os.path.abspath(file_path)} (absolute path)")
                 else:
                     # For paths in current directory, return relative paths
                     all_files.append(rel_path)
+                    logging.debug(f"Added {rel_path} (relative path)")
     
     return sorted(all_files)
 
