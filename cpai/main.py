@@ -108,7 +108,7 @@ def get_files(directory: str, config: Dict = None, include_all: bool = False) ->
         include_all: Whether to include all files
         
     Returns:
-        List of file paths relative to the directory
+        List of absolute file paths
     """
     logging.debug(f"Getting files from {directory}")
     logging.debug(f"Config: {config}")
@@ -118,22 +118,16 @@ def get_files(directory: str, config: Dict = None, include_all: bool = False) ->
     
     # Get patterns from config
     include_patterns = config.get('include', ['.'])
-    
-    # If nodocs => add excludes for docs directory and doc files
-    if config.get('nodocs'):
-        config.setdefault('exclude', [])
-        config['exclude'].extend(['**/*.txt', '**/*.md', '**/docs/**', '**/documentation/**'])
-    
-    # Only add default excludes if not including all files and no excludes specified
-    # Also skip default excludes if specific file extensions are requested
-    if not include_all and not config.get('exclude') and not config.get('fileExtensions'):
-        normal_excludes = DEFAULT_EXCLUDE_PATTERNS.copy()
-    else:
-        normal_excludes = config.get('exclude', [])
+    exclude_patterns = config.get('exclude', [])
+    if exclude_patterns is None:
+        exclude_patterns = []
     
     # Split exclude patterns into normal and negated patterns
-    normal_excludes = [p for p in (normal_excludes or []) if not p.startswith('!')]
-    negated_excludes = [p[1:] for p in (normal_excludes or []) if p.startswith('!')]
+    normal_excludes = [p for p in exclude_patterns if not p.startswith('!')]
+    negated_excludes = [p[1:] for p in exclude_patterns if p.startswith('!')]
+    
+    # Add default exclude patterns to normal excludes
+    normal_excludes = DEFAULT_EXCLUDE_PATTERNS.copy() + normal_excludes
     
     # Normalize file extensions to always start with a dot
     file_extensions = [] if include_all else [
@@ -141,17 +135,18 @@ def get_files(directory: str, config: Dict = None, include_all: bool = False) ->
         for ext in config.get('fileExtensions', [])
     ]
     
+    # If nodocs is enabled, add doc file patterns to exclude
+    if config.get('nodocs'):
+        normal_excludes.extend(['**/*.txt', '**/*.md'])
+    
     logging.debug(f"Include patterns: {include_patterns}")
     logging.debug(f"Normal exclude patterns: {normal_excludes}")
     logging.debug(f"Negated exclude patterns: {negated_excludes}")
     logging.debug(f"File extensions: {file_extensions}")
     
     # Convert '.' to match everything
-    if '.' in include_patterns:
-        if config.get('dirs_only'):
-            include_patterns = ['**']  # Match all directories
-        else:
-            include_patterns = ['**/*']  # Match all files
+    if '.' in include_patterns and not config.get('dirs_only'):
+        include_patterns = ['**/*']
     
     # Create gitignore specs
     exclude_spec = pathspec.PathSpec.from_lines(
@@ -163,52 +158,38 @@ def get_files(directory: str, config: Dict = None, include_all: bool = False) ->
         pathspec.patterns.GitWildMatchPattern,
         negated_excludes
     ) if negated_excludes else None
-    
+
     include_spec = pathspec.PathSpec.from_lines(
         pathspec.patterns.GitWildMatchPattern,
         include_patterns
     )
     
-    # Read gitignore if it exists
-    gitignore_path = os.path.join(directory, '.gitignore')
-    if os.path.exists(gitignore_path):
-        with open(gitignore_path) as f:
-            gitignore_spec = pathspec.PathSpec.from_lines(
-                pathspec.patterns.GitWildMatchPattern,
-                f.read().splitlines()
-            )
-    else:
-        gitignore_spec = None
-    
     # Get all files recursively
     all_files = []
     for root, dirs, files in os.walk(directory, followlinks=True):
+        # If we're only processing directories and this is the root directory
         if config.get('dirs_only'):
-            # Filter directories in-place to allow recursion
-            keep_dirs = []
-            for d in dirs:
-                dir_path = os.path.join(root, d)
+            # Process directories at any level
+            for dir_name in dirs:
+                dir_path = os.path.join(root, dir_name)
                 rel_path = os.path.relpath(dir_path, directory)
                 
-                # Skip if matches gitignore
-                if gitignore_spec and gitignore_spec.match_file(rel_path):
+                # Skip if matches exclude patterns and not negated
+                if exclude_spec.match_file(rel_path):
+                    if not negated_spec or not negated_spec.match_file(rel_path):
+                        logging.debug(f"Excluding directory {rel_path} due to exclude pattern")
+                        continue
+                    
+                # Skip if doesn't match include patterns
+                if not include_spec.match_file(rel_path):
+                    logging.debug(f"Excluding directory {rel_path} due to not matching include pattern")
                     continue
                 
-                # Only keep directories that pass excludes/includes
-                if (not exclude_spec.match_file(rel_path)
-                    and include_spec.match_file(rel_path)
-                    and (not negated_spec or not negated_spec.match_file(rel_path))
-                    and os.path.isdir(dir_path)):  # Ensure it's actually a directory
-                    keep_dirs.append(d)
-                    # Only add directories that are direct children of the search directory
-                    # and are not 'main' (which is a special case in the tests)
-                    if (os.path.dirname(rel_path) == '' or os.path.dirname(rel_path) == os.path.basename(directory)) and d != 'main':
-                        # Store the full relative path so os.path.isdir() works
-                        all_files.append(os.path.join(os.path.basename(directory), d) if os.path.basename(directory) != '.' else d)
-            
-            dirs[:] = keep_dirs  # Replace in-place so deeper recursion can happen
-            files[:] = []        # Skip all files
-            # No continue - allow recursion
+                logging.debug(f"Including directory: {rel_path}")
+                all_files.append(os.path.abspath(dir_path))
+            continue
+        
+        # Normal file processing if not in directory-only mode
         else:
             for file in files:
                 file_path = os.path.join(root, file)
@@ -219,21 +200,17 @@ def get_files(directory: str, config: Dict = None, include_all: bool = False) ->
                     
                 rel_path = os.path.relpath(file_path, directory)
                 
-                # Skip if matches gitignore
-                if gitignore_spec and gitignore_spec.match_file(rel_path):
-                    continue
-                
-                # Check includes first - if included, skip exclude checks
-                if not include_spec.match_file(rel_path):
-                    logging.debug(f"Excluding {rel_path} due to not matching include pattern")
-                    continue
-                
-                # Then check excludes
+                # Skip if matches exclude patterns and not negated
                 if exclude_spec.match_file(rel_path):
                     if not negated_spec or not negated_spec.match_file(rel_path):
                         logging.debug(f"Excluding {rel_path} due to exclude pattern")
                         continue
-                
+                    
+                # Skip if doesn't match include patterns
+                if not include_spec.match_file(rel_path):
+                    logging.debug(f"Excluding {rel_path} due to not matching include pattern")
+                    continue
+                    
                 # Check file extension if not including all files
                 if file_extensions:
                     file_ext = os.path.splitext(file)[1].lower()
@@ -244,11 +221,8 @@ def get_files(directory: str, config: Dict = None, include_all: bool = False) ->
                         logging.debug(f"Excluding {rel_path} due to file extension {file_ext}")
                         continue
                 
-                # Store absolute path if the input was absolute, otherwise store relative path
-                if os.path.isabs(directory):
-                    all_files.append(os.path.abspath(file_path))
-                else:
-                    all_files.append(rel_path)
+                logging.debug(f"Including file: {rel_path}")
+                all_files.append(os.path.abspath(file_path))  # Store absolute path
     
     return sorted(all_files)
 
@@ -842,9 +816,7 @@ def cpai(args, cli_options):
     # Then add files from directories
     for directory in target_dirs:
         files = get_files(directory, config, include_all=include_all)
-        # Convert relative paths from get_files to absolute paths
-        abs_files = [os.path.join(directory, f) for f in files]
-        all_files.extend(abs_files)
+        all_files.extend(files)  # Already absolute paths
     
     if not all_files:
         logging.warning("No files found to process")
