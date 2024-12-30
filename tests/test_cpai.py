@@ -6,7 +6,7 @@ import json
 import argparse
 import logging
 import subprocess
-from unittest.mock import patch, MagicMock
+from unittest.mock import patch, MagicMock, ANY
 from cpai.main import (
     read_config,
     get_files,
@@ -19,7 +19,9 @@ from cpai.main import (
 from cpai.constants import DEFAULT_EXCLUDE_PATTERNS, DEFAULT_CHUNK_SIZE
 from cpai.content_size import tokenize
 from cpai.formatter import format_tree
+from cpai.progress import ProgressIndicator
 import tiktoken
+import time
 
 class TestCPAI(unittest.TestCase):
     def setUp(self):
@@ -257,6 +259,245 @@ class TestCPAI(unittest.TestCase):
         finally:
             # Clean up
             os.remove('test.py')
+
+    def test_bydir_with_explicit_dirs(self):
+        """Test --bydir with explicitly specified directories."""
+        # Create test directories
+        os.makedirs('src/module1', exist_ok=True)
+        os.makedirs('src/module2', exist_ok=True)
+        with open('src/module1/test1.py', 'w') as f:
+            f.write('def test1():\n    pass\n')
+        with open('src/module2/test2.py', 'w') as f:
+            f.write('def test2():\n    pass\n')
+        
+        cli_options = {
+            'bydir': True,
+            'bydir_dirs': ['src/module1', 'src/module2'],
+            'tree': True,
+            'outputFile': True,
+            'overwrite': True
+        }
+        
+        with patch('cpai.main.write_output') as mock_write:
+            cpai([], cli_options)
+            # Should be called twice, once for each directory
+            self.assertEqual(mock_write.call_count, 2)
+            # Check output filenames
+            output_files = [call[0][1]['outputFile'] for call in mock_write.call_args_list]
+            self.assertIn('module1.tree.md', [os.path.basename(f) for f in output_files])
+            self.assertIn('module2.tree.md', [os.path.basename(f) for f in output_files])
+
+    def test_bydir_auto_discovery(self):
+        """Test --bydir without specified directories."""
+        cli_options = {
+            'bydir': True,
+            'bydir_dirs': ['.'],
+            'tree': True,
+            'outputFile': True,
+            'overwrite': True
+        }
+        
+        with patch('cpai.main.write_output') as mock_write:
+            cpai([], cli_options)
+            # Should process both module1 and module2
+            self.assertGreaterEqual(mock_write.call_count, 2)
+
+    def test_bydir_overwrite_protection(self):
+        """Test --bydir respects overwrite protection."""
+        cli_options = {
+            'bydir': True,
+            'bydir_dirs': ['src/module1'],
+            'tree': True,
+            'outputFile': True,
+            'overwrite': False
+        }
+        
+        with patch('cpai.main.write_output') as mock_write:
+            cpai([], cli_options)
+            # Should not write anything since file exists and overwrite is False
+            mock_write.assert_not_called()
+
+    def test_bydir_with_overwrite(self):
+        """Test --bydir with overwrite enabled."""
+        # Create test directory and file
+        os.makedirs('src/module1', exist_ok=True)
+        with open('src/module1/test.py', 'w') as f:
+            f.write('def test():\n    pass\n')
+        
+        cli_options = {
+            'bydir': True,
+            'bydir_dirs': ['src/module1'],
+            'tree': True,
+            'outputFile': True,
+            'overwrite': True
+        }
+        
+        with patch('cpai.main.write_output') as mock_write:
+            cpai([], cli_options)
+            # Should write even though file exists
+            mock_write.assert_called_once()
+
+    def test_progress_indicator(self):
+        """Test progress indicator functionality."""
+        progress = ProgressIndicator("Testing")
+        
+        with patch('sys.stdout.write') as mock_write:
+            progress.start()
+            # Give it time to make at least one update
+            time.sleep(1)
+            progress.stop()
+            
+            # Should have written to stdout at least once
+            mock_write.assert_called()
+            # Should have cleared the line at the end
+            self.assertEqual(
+                mock_write.call_args_list[-1][0][0],
+                '\r' + ' ' * (len("Testing") + 3) + '\r'
+            )
+
+    def test_progress_indicator_in_cpai(self):
+        """Test progress indicator is used in cpai function."""
+        cli_options = {
+            'outputFile': 'test_output.md',
+            'tree': True
+        }
+        
+        with patch('cpai.main.ProgressIndicator') as MockProgress:
+            mock_progress = MagicMock()
+            MockProgress.return_value = mock_progress
+            
+            cpai(['src/module1'], cli_options)
+            
+            # Progress indicator should be created and used
+            MockProgress.assert_called_once()
+            mock_progress.start.assert_called_once()
+            mock_progress.stop.assert_called_once()
+
+    def test_bydir_nested_paths(self):
+        """Test --bydir handles nested paths correctly."""
+        # Create nested test structure
+        os.makedirs('src/nested/module1', exist_ok=True)
+        os.makedirs('src/nested/module2', exist_ok=True)
+        with open('src/nested/module1/test1.py', 'w') as f:
+            f.write('def test1():\n    pass\n')
+        with open('src/nested/module2/test2.py', 'w') as f:
+            f.write('def test2():\n    pass\n')
+        
+        cli_options = {
+            'bydir': True,
+            'bydir_dirs': ['src/nested/module1', 'src/nested/module2'],
+            'tree': True,
+            'outputFile': True,
+            'overwrite': True
+        }
+        
+        original_cwd = os.getcwd()
+        with patch('cpai.main.write_output') as mock_write:
+            cpai([], cli_options)
+            
+            # Should be called twice, once for each directory
+            self.assertEqual(mock_write.call_count, 2)
+            
+            # Check output filenames are in original directory
+            output_files = [call[0][1]['outputFile'] for call in mock_write.call_args_list]
+            self.assertTrue(all(os.path.dirname(f) == original_cwd for f in output_files))
+            self.assertIn('module1.tree.md', [os.path.basename(f) for f in output_files])
+            self.assertIn('module2.tree.md', [os.path.basename(f) for f in output_files])
+
+    def test_bydir_maintains_cwd(self):
+        """Test --bydir maintains original working directory even after errors."""
+        os.makedirs('src/error_module', exist_ok=True)
+        original_cwd = os.getcwd()
+        
+        cli_options = {
+            'bydir': True,
+            'bydir_dirs': ['src/error_module'],
+            'tree': True,
+            'outputFile': True,
+            'overwrite': True
+        }
+        
+        with patch('cpai.main.process_files') as mock_process:
+            # Simulate an error during processing
+            mock_process.side_effect = Exception("Test error")
+            
+            cpai([], cli_options)
+            
+            # Should return to original directory
+            self.assertEqual(os.getcwd(), original_cwd)
+
+    def test_bydir_auto_discovery_excludes_hidden(self):
+        """Test --bydir auto-discovery excludes hidden directories."""
+        # Create test directories including hidden ones
+        os.makedirs('src/visible_module', exist_ok=True)
+        os.makedirs('.hidden_module', exist_ok=True)
+        os.makedirs('src/.hidden_nested', exist_ok=True)
+        
+        cli_options = {
+            'bydir': True,
+            'bydir_dirs': ['.'],
+            'tree': True,
+            'outputFile': True,
+            'overwrite': True
+        }
+        
+        with patch('cpai.main.write_output') as mock_write:
+            cpai([], cli_options)
+            
+            # Check output filenames don't include hidden directories
+            output_files = [os.path.basename(call[0][1]['outputFile']) for call in mock_write.call_args_list]
+            self.assertNotIn('.hidden_module.tree.md', output_files)
+            self.assertNotIn('.hidden_nested.tree.md', output_files)
+
+    def test_bydir_relative_file_paths(self):
+        """Test --bydir handles relative file paths correctly."""
+        # Create test structure
+        os.makedirs('src/module1/nested', exist_ok=True)
+        with open('src/module1/nested/test.py', 'w') as f:
+            f.write('def test():\n    pass\n')
+        
+        cli_options = {
+            'bydir': True,
+            'bydir_dirs': ['src/module1'],
+            'tree': True,
+            'outputFile': True,
+            'overwrite': True
+        }
+        
+        with patch('cpai.main.process_files') as mock_process:
+            cpai([], cli_options)
+            
+            # Check that files are processed with correct relative paths
+            processed_files = mock_process.call_args[0][0]
+            self.assertTrue(any('nested/test.py' in f for f in processed_files))
+
+    def test_bydir_output_path_collision(self):
+        """Test --bydir handles output path collisions correctly."""
+        # Create test directories with same basename
+        os.makedirs('src/module', exist_ok=True)
+        os.makedirs('other/module', exist_ok=True)
+        with open('src/module/test1.py', 'w') as f:
+            f.write('def test1():\n    pass\n')
+        with open('other/module/test2.py', 'w') as f:
+            f.write('def test2():\n    pass\n')
+        
+        # Create existing output file
+        with open('module.tree.md', 'w') as f:
+            f.write('existing content')
+        
+        cli_options = {
+            'bydir': True,
+            'bydir_dirs': ['src/module', 'other/module'],
+            'tree': True,
+            'outputFile': True,
+            'overwrite': False
+        }
+        
+        with patch('cpai.main.write_output') as mock_write:
+            cpai([], cli_options)
+            
+            # Should not write any files due to collision
+            mock_write.assert_not_called()
 
 if __name__ == '__main__':
     unittest.main()

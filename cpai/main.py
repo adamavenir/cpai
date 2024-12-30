@@ -31,6 +31,7 @@ from .formatter import (
 )
 from .cli import parse_arguments, merge_cli_options
 from .config import configure_logging, read_config
+from .progress import ProgressIndicator
 
 def write_output(content, config):
     """Write content to file, clipboard, or stdout."""
@@ -48,12 +49,17 @@ def write_output(content, config):
             output_file = 'cpai_output.md'
         with open(output_file, 'w', encoding='utf-8') as f:
             f.write(content)
-        logging.info(f"Content written to {output_file} ({size_info['formatted_chars']} characters, {size_info['formatted_tokens']} tokens)")
+        # Get relative path for display
+        rel_path = os.path.relpath(output_file)
+        # Add newline before content message
+        print()
+        logging.info(f"Content written to {rel_path} ({size_info['formatted_chars']} characters, {size_info['formatted_tokens']} tokens)")
         return
     
     # Print to stdout if specified
     if config.get('stdout', False):
         print(content)
+        print()  # Add newline before size message
         logging.info(f"Content size: {size_info['formatted_chars']} characters, {size_info['formatted_tokens']} tokens")
         return
     
@@ -72,6 +78,7 @@ def write_output(content, config):
                 raise subprocess.CalledProcessError(process.returncode, 'pbcopy')
                 
         # Log success with tree-specific message
+        print()  # Add newline before content message
         if config.get('tree'):
             logging.info(f"✨ File and function tree copied to clipboard! ({size_info['formatted_chars']} characters, {size_info['formatted_tokens']} tokens)")
         else:
@@ -147,33 +154,113 @@ def cpai(args, cli_options):
     config = read_config()
     config.update(cli_options)
     
-    # Get files to process
-    files = []
-    # If no paths provided, use current directory
-    paths = args if args else ['.']
-    for path in paths:
-        if os.path.isdir(path):
-            files.extend(get_files(path, config))
-        else:
-            files.append(path)
+    if config.get('bydir'):
+        # Process each directory independently
+        base_dirs = config['bydir_dirs']
+        processed_dirs = set()  # Track processed directories
+        
+        # If using current directory, get immediate subdirectories
+        if base_dirs == ['.']:
+            base_dirs = [d for d in os.listdir('.') if os.path.isdir(d)]
+        
+        # Store current directory
+        original_cwd = os.getcwd()
+        
+        for dir_path in base_dirs:
+            # Skip if already processed
+            if dir_path in processed_dirs:
+                continue
+            processed_dirs.add(dir_path)
             
-    if not files:
-        logging.warning("No files found to process.")
-        return None
+            # Get absolute path
+            abs_dir_path = os.path.abspath(dir_path)
+            
+            # Change to directory before processing
+            try:
+                os.chdir(original_cwd)  # Always start from original directory
+                os.chdir(abs_dir_path)
+                
+                # Get files for this directory
+                dir_files = []
+                dir_files.extend(get_files('.', config))
+                
+                if not dir_files:
+                    logging.warning(f"No files found to process in {dir_path}")
+                    continue
+                    
+                # Create a copy of config for this directory
+                dir_config = config.copy()
+                dir_config['files'] = dir_files
+                
+                # Set output file name based on directory name
+                dir_name = os.path.basename(abs_dir_path)
+                output_file = os.path.join(original_cwd, f"{dir_name}.tree.md")
+                
+                # Check if output file exists and we don't have overwrite permission
+                if os.path.exists(output_file) and not config.get('overwrite'):
+                    if not config.get('confirmed_overwrite'):
+                        print(f"Output file {output_file} already exists. Use --overwrite to force overwrite.")
+                        continue
+                
+                dir_config['outputFile'] = output_file
+                
+                # Show progress indicator
+                progress = ProgressIndicator(f"Processing {dir_name}")
+                progress.start()
+                
+                try:
+                    # Process files in this directory
+                    processed_files = process_files(dir_files, dir_config)
+                    
+                    # Format content
+                    content = format_content(processed_files, dir_config)
+                    
+                    # Write output
+                    write_output(content, dir_config)
+                finally:
+                    progress.stop()
+            except Exception as e:
+                logging.error(f"Error processing directory {dir_path}: {str(e)}")
+            finally:
+                # Always restore original directory
+                os.chdir(original_cwd)
+            
+        return None  # No single content to return in bydir mode
+    else:
+        # Original single-output mode
+        files = []
+        # If no paths provided, use current directory
+        paths = args if args else ['.']
+        for path in paths:
+            if os.path.isdir(path):
+                files.extend(get_files(path, config))
+            else:
+                files.append(path)
+                
+        if not files:
+            logging.warning("No files found to process.")
+            return None
+            
+        # Add files to config for reference
+        config['files'] = files
         
-    # Add files to config for reference
-    config['files'] = files
+        # Show progress indicator
+        progress = ProgressIndicator("Processing")
+        progress.start()
         
-    # Process files
-    processed_files = process_files(files, config)
-    
-    # Format content
-    content = format_content(processed_files, config)
-    
-    # Write output
-    write_output(content, config)
-    
-    return content
+        try:
+            # Process files
+            processed_files = process_files(files, config)
+            
+            # Format content
+            content = format_content(processed_files, config)
+            
+            # Write output
+            write_output(content, config)
+        finally:
+            progress.stop()
+        
+        return content
 
 def main():
     """Entry point for the cpai tool."""

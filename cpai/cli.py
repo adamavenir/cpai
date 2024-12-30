@@ -65,6 +65,18 @@ def parse_arguments(argv: Optional[List[str]] = None) -> argparse.Namespace:
         help='Enable debug logging'
     )
     
+    parser.add_argument(
+        '--bydir',
+        nargs='*',
+        help='Process directories independently and output to {dir}.tree.md files. If no directories are specified, processes all non-excluded directories in current path.'
+    )
+    
+    parser.add_argument(
+        '--overwrite', '-o',
+        action='store_true',
+        help='Overwrite existing output files without confirmation'
+    )
+    
     return parser.parse_args(argv)
 
 def merge_cli_options(args: argparse.Namespace, config: Dict[str, Any]) -> Dict[str, Any]:
@@ -77,13 +89,27 @@ def merge_cli_options(args: argparse.Namespace, config: Dict[str, Any]) -> Dict[
     Returns:
         Updated configuration dictionary
     """
-    # Update config with CLI options
+    # Handle bydir mode
+    if args.bydir is not None:
+        config['bydir'] = True
+        config['bydir_dirs'] = args.bydir if args.bydir else ['.']
+        # In bydir mode, we always output to files named {dir}.tree.md
+        config['outputFile'] = True
+        config['tree'] = True  # Force tree mode in bydir mode
+    else:
+        config['bydir'] = False
+        config['bydir_dirs'] = []
+        config.update({
+            'outputFile': args.file if args.file is not None else False,
+            'usePastebin': not args.noclipboard and not args.stdout,
+            'stdout': args.stdout
+        })
+
+    # Common options that apply in both modes
     config.update({
-        'outputFile': args.file if args.file is not None else False,
-        'usePastebin': not args.noclipboard and not args.stdout,
         'include_all': args.all,
-        'tree': args.tree,
-        'stdout': args.stdout
+        'tree': args.tree or config.get('tree', False),  # Keep tree mode if set by bydir
+        'overwrite': args.overwrite,  # Add overwrite option
     })
     
     # Add exclude patterns if specified

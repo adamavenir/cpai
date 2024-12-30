@@ -24,6 +24,38 @@ Options:
 - `-a, --all`: Include all files (including tests, configs, etc.)
 - `-c, --configs`: Include configuration files
 - `-x PATTERN [PATTERN...], --exclude PATTERN [PATTERN...]`: Additional patterns to exclude
+- `--bydir [DIR...]`: Process directories independently and output to {dir}.tree.md files. If no directories are specified, processes all non-excluded directories in current path.
+- `--overwrite`, `-o`: Overwrite existing output files without confirmation
+
+### Examples
+
+Process all files in current directory:
+```bash
+cpai
+```
+
+Generate a tree view of specific files:
+```bash
+cpai --tree src/main.py src/utils.py
+```
+
+Process multiple directories independently:
+```bash
+cpai --bydir src/module1 src/module2 src/module3
+# Creates: module1.tree.md, module2.tree.md, module3.tree.md
+```
+
+Process all non-excluded directories in current path:
+```bash
+cpai --bydir
+# Creates a .tree.md file for each directory
+```
+
+Process directories and overwrite existing files:
+```bash
+cpai --bydir --overwrite
+# Creates or overwrites .tree.md files for each directory
+```
 
 If no files or directories are specified, cpai will process all supported files in the current directory.
 
