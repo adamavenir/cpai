@@ -12,218 +12,92 @@ from typing import List, Dict, Any, Optional
 from .outline.base import FunctionInfo, OutlineExtractor
 from .outline import EXTRACTORS
 import pathspec
-import tiktoken
 from .constants import (
     DEFAULT_CHUNK_SIZE,
     DEFAULT_EXCLUDE_PATTERNS,
     CORE_SOURCE_PATTERNS,
     DEFAULT_FILE_EXTENSIONS
 )
+from .file_selection import get_files, should_process_file, get_relative_path, should_match_pattern
+from .content_size import validate_content_size
+from .formatter import (
+    format_functions_as_tree,
+    format_outline_tree,
+    build_tree_structure,
+    format_tree_with_outlines,
+    format_content,
+    get_language_from_ext,
+    get_extractor_for_ext
+)
+from .cli import parse_arguments, merge_cli_options
+from .config import configure_logging, read_config
 
-# Function to configure logging
-def configure_logging(debug):
-    if debug:
-        logging.basicConfig(level=logging.DEBUG, format='%(levelname)s - %(message)s')
-    else:
-        logging.basicConfig(level=logging.INFO, format='%(message)s')
-
-def read_config():
-    logging.debug("Reading configuration")
-    default_config = {
-        "include": ["**/*"],
-        "exclude": DEFAULT_EXCLUDE_PATTERNS.copy(),
-        "outputFile": False,
-        "usePastebin": True,
-        "fileExtensions": DEFAULT_FILE_EXTENSIONS,
-        "chunkSize": DEFAULT_CHUNK_SIZE
-    }
+def write_output(content, config):
+    """Write content to file, clipboard, or stdout."""
+    # Validate content size
+    size_info = validate_content_size(content, config.get('chunkSize', DEFAULT_CHUNK_SIZE))
+    
+    # Check content size
+    if size_info['exceeds_limit']:
+        print(f"\nWarning: Content size ({size_info['formatted_chars']} characters) exceeds the maximum size ({size_info['formatted_max_size']} characters).")
+    
+    # Write to file if specified
+    if config.get('outputFile'):
+        output_file = config['outputFile']
+        if isinstance(output_file, bool):
+            output_file = 'cpai_output.md'
+        with open(output_file, 'w', encoding='utf-8') as f:
+            f.write(content)
+        logging.info(f"Content written to {output_file} ({size_info['formatted_chars']} characters, {size_info['formatted_tokens']} tokens)")
+        return
+    
+    # Print to stdout if specified
+    if config.get('stdout', False):
+        print(content)
+        logging.info(f"Content size: {size_info['formatted_chars']} characters, {size_info['formatted_tokens']} tokens")
+        return
+    
+    # Otherwise copy to clipboard
     try:
-        with open('cpai.config.json', 'r') as f:
-            try:
-                config = json.load(f)
-            except json.JSONDecodeError:
-                logging.warning("Invalid JSON in config file. Using default configuration.")
-                return default_config
+        # Create a temporary file for the content
+        with tempfile.NamedTemporaryFile(mode='w', encoding='utf-8') as temp_file:
+            temp_file.write(content)
+            temp_file.flush()
             
-            # Handle exclude patterns
-            if 'exclude' in config:
-                if config['exclude'] is None:
-                    # Keep default exclude patterns if user config has null
-                    config.pop('exclude')
-                elif not isinstance(config['exclude'], list):
-                    logging.warning("Invalid 'exclude' in config. Using default.")
-                    config.pop('exclude')
-                else:
-                    # Start with default patterns and add user patterns
-                    default_config['exclude'].extend([str(pattern) for pattern in config['exclude']])
-                    config['exclude'] = default_config['exclude']
+            # Use pbcopy on macOS
+            process = subprocess.Popen(['pbcopy'], stdin=subprocess.PIPE)
+            process.communicate(content.encode('utf-8'))
             
-            # Validate other fields and update config
-            if isinstance(config.get('outputFile'), (bool, str)):
-                default_config.update(config)
-            else:
-                logging.warning("Invalid 'outputFile' in config. Using default.")
+            if process.returncode != 0:
+                raise subprocess.CalledProcessError(process.returncode, 'pbcopy')
+                
+        # Log success with tree-specific message
+        if config.get('tree'):
+            logging.info(f"✨ File and function tree copied to clipboard! ({size_info['formatted_chars']} characters, {size_info['formatted_tokens']} tokens)")
+        else:
+            logging.info(f"Content copied to clipboard ({size_info['formatted_chars']} characters, {size_info['formatted_tokens']} tokens)")
             
-            # Ensure chunkSize is an integer
-            if 'chunkSize' in config:
-                if isinstance(config['chunkSize'], int):
-                    default_config['chunkSize'] = config['chunkSize']
-                else:
-                    logging.warning("Invalid 'chunkSize' in config. Using default.")
-            
-            return default_config
-    except FileNotFoundError:
-        logging.debug("Configuration file not found. Using default configuration.")
-        return default_config
+    except (subprocess.CalledProcessError, UnicodeEncodeError) as e:
+        logging.error(f"Failed to copy to clipboard: {str(e)}")
 
-def get_relative_path(path: str) -> str:
-    """Get relative path from current directory."""
-    rel_path = os.path.relpath(path)
-    # Remove ./ prefix if present
-    if rel_path.startswith('./'):
-        rel_path = rel_path[2:]
-    return rel_path
-
-def should_match_pattern(path: str, pattern: str) -> bool:
-    """Check if a path matches a pattern, handling directory patterns correctly."""
-    # Normalize paths to use forward slashes
-    path = path.replace(os.sep, '/')
-    pattern = pattern.replace(os.sep, '/')
-    
-    # Handle directory patterns
-    if pattern.endswith('/'):
-        # Check if path starts with the pattern or is a subdirectory
-        pattern = pattern.rstrip('/')
-        path_parts = path.split('/')
-        return pattern in path_parts
-        
-    # Handle file patterns (including globs)
-    return fnmatch.fnmatch(path, pattern)
-
-def get_files(directory: str, config: Dict = None, include_all: bool = False) -> List[str]:
-    """Get list of files to process.
-    
-    Args:
-        directory: Directory to search
-        config: Configuration dictionary
-        include_all: Whether to include all file types
-        
-    Returns:
-        List of absolute file paths to process
-    """
+def process_files(files: List[str], config: Dict = None) -> Dict[str, Dict]:
+    """Process multiple files and return their content."""
     if config is None:
         config = {}
-
-    # Ensure we have absolute path for directory
-    directory = os.path.abspath(directory)
-    logging.debug(f"Searching directory: {directory}")
+        
+    # Initialize result dictionary
+    result = {}
     
-    # Get patterns from config
-    include_patterns = config.get('include', ['**/*'])  # Default to all files
-    custom_excludes = config.get('exclude', [])
-    file_extensions = [] if include_all else config.get('fileExtensions', [])
-    
-    logging.debug(f"Include patterns: {include_patterns}")
-    logging.debug(f"Exclude patterns: {custom_excludes}")
-    logging.debug(f"File extensions: {file_extensions}")
-    
-    # Start with default exclude patterns
-    exclude_patterns = DEFAULT_EXCLUDE_PATTERNS.copy()
-    if custom_excludes:
-        if isinstance(custom_excludes, list):
-            exclude_patterns.extend(custom_excludes)
-    
-    # Add .gitignore patterns if .gitignore exists
-    gitignore_path = os.path.join(directory, '.gitignore')
-    if os.path.exists(gitignore_path):
-        try:
-            with open(gitignore_path, 'r') as f:
-                for line in f:
-                    line = line.strip()
-                    if not line or line.startswith('#'):
-                        continue
-                    if line.startswith('!'):
-                        # Handle negation patterns
-                        pattern = line[1:]  # Remove !
-                        if pattern.startswith('/'):
-                            pattern = pattern[1:]  # Remove leading slash
-                        exclude_patterns.append(f"!{pattern}")  # Keep the ! prefix
-                    else:
-                        if line.startswith('/'):
-                            line = line[1:]  # Remove leading slash
-                        exclude_patterns.append(line)
-        except Exception as e:
-            logging.warning(f"Failed to read .gitignore: {e}")
-    
-    logging.debug(f"Final exclude patterns: {exclude_patterns}")
-    
-    # Create gitignore spec for exclude patterns
-    exclude_spec = pathspec.PathSpec.from_lines(
-        pathspec.patterns.GitWildMatchPattern,
-        exclude_patterns if exclude_patterns else ['']  # Avoid empty list error
-    )
-    
-    # Create include spec
-    include_spec = pathspec.PathSpec.from_lines(
-        pathspec.patterns.GitWildMatchPattern,
-        include_patterns
-    )
-    
-    # Get all files recursively
-    all_files = []
-    for root, _, files in os.walk(directory, followlinks=True):
-        for file in files:
-            file_path = os.path.join(root, file)
-            
-            # Skip broken symlinks
-            if os.path.islink(file_path) and not os.path.exists(file_path):
-                continue
+    # Process each file
+    for file_path in files:
+        if should_process_file(file_path, config):
+            file_data = process_file(file_path, config)
+            if file_data:  # Only include successfully processed files
+                # Get the basename for the key
+                rel_path = os.path.basename(file_path)
+                result[rel_path] = file_data
                 
-            rel_path = os.path.relpath(file_path, directory)
-            
-            # Skip if matches exclude patterns
-            if exclude_spec.match_file(rel_path):
-                # Find which pattern matched
-                matching_pattern = None
-                for pattern in exclude_patterns:
-                    if pathspec.patterns.GitWildMatchPattern(pattern).match_file(rel_path):
-                        matching_pattern = pattern
-                        break
-                logging.debug(f"Excluding {rel_path} due to exclude pattern: {matching_pattern}")
-                continue
-                
-            # Skip if doesn't match include patterns
-            if not include_spec.match_file(rel_path):
-                logging.debug(f"Excluding {rel_path} due to not matching include pattern")
-                continue
-                
-            # Check file extension if not including all files
-            if file_extensions:
-                ext = os.path.splitext(file)[1].lower()
-                if not ext or ext not in file_extensions:
-                    logging.debug(f"Excluding {rel_path} due to file extension {ext}")
-                    continue
-            
-            logging.debug(f"Including file: {rel_path}")
-            all_files.append(os.path.abspath(file_path))  # Store absolute path
-    
-    return sorted(all_files)
-
-def extract_outline(file_path):
-    """Extract function outlines from a file."""
-    from .outline import EXTRACTORS
-    
-    try:
-        # Find the appropriate extractor
-        for extractor in EXTRACTORS:
-            if extractor.supports_file(file_path):
-                with open(file_path, 'r', encoding='utf-8') as f:
-                    content = f.read()
-                return extractor.extract_functions(content)
-        return []
-    except Exception as e:
-        logging.error(f"Failed to read file {file_path}: {e}")
-        return None
+    return result
 
 def process_file(file_path: str, options: Dict[str, Any]) -> Dict[str, Any]:
     """Process a single file and return its content and outline."""
@@ -248,617 +122,71 @@ def process_file(file_path: str, options: Dict[str, Any]) -> Dict[str, Any]:
         logging.error(f"Failed to read file {file_path}: {e}")
         return {'outline': []} if options.get('tree') else None  # Return empty outline in tree mode
 
-def format_functions_as_tree(functions: List[FunctionInfo], indent: str = '', extractor: Optional[OutlineExtractor] = None) -> str:
-    """Format a list of functions as a tree structure.
+def extract_outline(file_path):
+    """Extract function outlines from a file."""
+    from .outline import EXTRACTORS
     
-    Args:
-        functions: List of function information objects
-        indent: Current indentation level
-        extractor: Language-specific extractor for custom formatting
-        
-    Returns:
-        A string representation of the function tree
-    """
-    if not functions:
-        return ''
-    
-    # Sort functions by name
-    sorted_funcs = sorted(functions, key=lambda x: x.name.lower())
-    
-    # Group methods by class
-    classes = {}
-    standalone_funcs = []
-    
-    for func in sorted_funcs:
-        name = func.name
-        if '.' in name:
-            class_name, method_name = name.split('.', 1)
-            if class_name not in classes:
-                classes[class_name] = []
-            func.name = method_name  # Store just the method name
-            classes[class_name].append(func)
-        else:
-            standalone_funcs.append(func)
-    
-    # Format the tree
-    lines = []
-    
-    # Add classes and their methods
-    for class_name in sorted(classes.keys()):
-        # Add class with a different symbol to distinguish from functions
-        lines.append(f"{indent}├── {class_name}")
-        class_methods = format_functions_as_tree(classes[class_name], indent + '│   ', extractor)
-        if class_methods:
-            lines.append(class_methods)
-    
-    # Add standalone functions
-    for func in standalone_funcs:
-        prefix = '└── ' if func == standalone_funcs[-1] and not classes else '├── '
-        
-        # Use language-specific formatting if available
-        if extractor:
-            func_str = extractor.format_function_for_tree(func)
-        else:
-            # Default formatting
-            if hasattr(func, 'parameters') and func.parameters:
-                func_str = f"{func.name}({func.parameters})"
-            else:
-                func_str = f"{func.name}()"
-                
-        lines.append(f"{indent}{prefix}{func_str}")
-    
-    return '\n'.join(lines)
-
-def format_outline_tree(files: Dict[str, Dict], options: Dict) -> Dict[str, str]:
-    """Format files and their outlines as a tree structure.
-    
-    Args:
-        files: Dictionary of file paths to their content
-        options: Configuration options
-        
-    Returns:
-        Dictionary of file paths to their tree representation
-    """
-    tree = {}
-    for file_path, file_data in files.items():
-        if not file_data or 'outline' not in file_data:
-            continue
-            
-        outline = file_data['outline']
-        if not outline:
-            continue
-            
-        # Get the appropriate extractor for this file
-        extractor = None
-        ext = os.path.splitext(file_path)[1].lower()
-        for e in EXTRACTORS:
-            if e.supports_file(file_path):
-                extractor = e
-                break
-            
-        # Format the functions for this file
-        tree[file_path] = format_functions_as_tree(outline, extractor=extractor)
-    
-    return tree
-
-def build_tree_structure(files_dict: Dict[str, str]) -> Dict:
-    """Build a nested tree structure from file paths and their outlines.
-    
-    Args:
-        files_dict: Dictionary of file paths to their outlines
-        
-    Returns:
-        A nested dictionary representing the tree structure
-    """
-    tree = {}
-    for file_path, file_info in files_dict.items():
-        current = tree
-        parts = file_path.split('/')
-        
-        # Add directories
-        for part in parts[:-1]:
-            if part not in current:
-                current[part] = {}
-            current = current[part]
-        
-        # Format the outline into a string before adding it to the tree
-        outline = file_info.get('outline', [])
-        outline_str = format_functions_as_tree(outline) if outline else ''
-        
-        # Add file with its formatted outline
-        current[parts[-1]] = outline_str
-    
-    return tree
-
-def format_tree_with_outlines(tree: Dict, indent: str = '') -> str:
-    """Format a nested tree structure with outlines.
-    
-    Args:
-        tree: Nested dictionary of directories and files
-        indent: Current indentation level
-        
-    Returns:
-        A string representation of the tree with outlines
-    """
-    if not tree:
-        return ''
-    
-    lines = []
-    items = sorted(tree.items())
-    
-    for i, (name, content) in enumerate(items):
-        is_last = i == len(items) - 1
-        prefix = '└── ' if is_last else '├── '
-        
-        # Add the current item (directory or file)
-        lines.append(f"{indent}{prefix}{name}")
-        
-        # Set up the new indent for children
-        new_indent = indent + ('    ' if is_last else '│   ')
-        
-        # If it's a nested structure (directory)
-        if isinstance(content, dict) and not isinstance(content, str):
-            subtree = format_tree_with_outlines(content, new_indent)
-            if subtree:
-                lines.append(subtree)
-        # If it's a file with an outline
-        elif content:
-            # Indent the outline under the file
-            outline_lines = content.split('\n')
-            lines.extend(f"{new_indent}{line}" for line in outline_lines)
-    
-    return '\n'.join(lines)
-
-def format_content(files: Dict[str, Dict], options: Dict) -> str:
-    """Format content based on options."""
-    if not files:
-        return ""
-    
-    # Convert absolute paths to relative for output
-    cwd = os.getcwd()
-    rel_files = {os.path.relpath(k, cwd): v for k, v in files.items()}
-    
-    output = []
-    
-    # If in tree mode, just output the tree structure
-    if options.get('tree'):
-        tree = build_tree_structure(rel_files)
-        return format_tree_with_outlines(tree)
-    
-    # Add tree outline at the top
-    tree = build_tree_structure(rel_files)
-    output.append("# Project Outline")
-    output.append(format_tree_with_outlines(tree))
-    output.append("")
-    
-    # Format each file's content
-    for file_path, file_info in sorted(rel_files.items()):
-        # Get language from file extension
-        ext = os.path.splitext(file_path)[1].lower()
-        language = get_language_from_ext(ext)
-        
-        # Add file header
-        output.append(f"# {file_path}")
-        
-        # Add language identifier for code blocks if we have one
-        if language:
-            output.append(f"\n````{language}")
-        else:
-            output.append("\n````")
-        
-        # Add file content if we have it
-        if file_info.get('content'):
-            output.append(file_info['content'])
-        
-        output.append("````\n")
-    
-    return "\n".join(output)
-
-def generate_tree(files: List[str]) -> str:
-    """Generate a tree view of files and their functions."""
-    if not files:
-        return "```\nNo files found.\n```\n"
-        
-    # Sort files to ensure consistent order
-    files = sorted(files)
-    
-    # Generate directory structure
-    tree_lines = ['```']
-    base_dir = os.path.commonpath([os.path.abspath(f) for f in files]) if files else ''
-    
-    for file in files:
-        # Ensure the path is relative and uses forward slashes
-        rel_path = get_relative_path(file)
-        tree_lines.append(f"    {rel_path}")
-    tree_lines.append('```\n')
-    
-    # Generate function tree for each file
-    for file in files:
-        abs_path = os.path.abspath(file)
-        ext = os.path.splitext(file)[1]
-        extractor = get_extractor_for_ext(ext)
-        
-        if extractor and os.path.exists(abs_path):
-            try:
-                with open(abs_path, 'r', encoding='utf-8') as f:
-                    content = f.read()
-                functions = extractor.extract_functions(content)
-                
-                if functions:
-                    tree_lines.append(f'\n## {get_relative_path(file)}')
-                    current_class = None
-                    
-                    for func in functions:
-                        indent = '    ' if '.' in func.name else ''
-                        tree_lines.append(f'{indent}└── {func.name}')
-            except Exception as e:
-                logging.error(f"Error processing file {file}: {e}")
-    
-    return '\n'.join(tree_lines)
-
-def get_extractor_for_ext(ext: str) -> Optional[OutlineExtractor]:
-    """Get the appropriate extractor for a file extension."""
-    from .outline.javascript import JavaScriptOutlineExtractor
-    from .outline.python import PythonOutlineExtractor
-    from .outline.solidity import SolidityOutlineExtractor
-    from .outline.rust import RustOutlineExtractor
-    
-    extractors = {
-        '.js': JavaScriptOutlineExtractor(),
-        '.jsx': JavaScriptOutlineExtractor(),
-        '.ts': JavaScriptOutlineExtractor(),
-        '.tsx': JavaScriptOutlineExtractor(),
-        '.py': PythonOutlineExtractor(),
-        '.sol': SolidityOutlineExtractor(),
-        '.rs': RustOutlineExtractor(),
-    }
-    return extractors.get(ext.lower())
-
-def tokenize(text: str) -> List[int]:
-    """Tokenize text using OpenAI's tiktoken library.
-    Uses cl100k_base encoding which is used for gpt-4, text-embedding-ada-002, etc."""
     try:
-        encoding = tiktoken.get_encoding("cl100k_base")
-        return encoding.encode(text)
+        # Find the appropriate extractor
+        for extractor in EXTRACTORS:
+            if extractor.supports_file(file_path):
+                with open(file_path, 'r', encoding='utf-8') as f:
+                    content = f.read()
+                return extractor.extract_functions(content)
+        return []
     except Exception as e:
-        logging.warning(f"Failed to use tiktoken for tokenization: {e}. Falling back to simple tokenization.")
-        # Fallback to simple tokenization
-        return re.findall(r'\b\w+\b|[^\w\s]', text)
-
-def write_output(content, config):
-    """Write output to clipboard and/or file."""
-    # Check content size and tokens
-    content_size = len(content)
-    tokens = tokenize(content)
-    token_count = len(tokens)
-    chunk_size = config.get('chunkSize', 90000)
-    
-    if content_size > chunk_size:
-        print(f"\nWarning: Content size ({content_size:,} characters) exceeds the maximum size ({chunk_size:,} characters).")
-    
-    # Write to file if specified
-    if config.get('outputFile'):
-        output_file = config['outputFile']
-        try:
-            with open(output_file, 'w', encoding='utf-8') as f:
-                f.write(content)
-            logging.info(f"Content written to {output_file} ({content_size:,} characters, {token_count:,} tokens)")
-        except Exception as e:
-            logging.error(f"Failed to write to file: {e}")
-    
-    # Copy to clipboard if enabled
-    if config.get('usePastebin', True) and not config.get('stdout'):
-        try:
-            process = subprocess.Popen(['pbcopy'], stdin=subprocess.PIPE)
-            process.communicate(content.encode('utf-8'))
-            if process.returncode != 0:
-                logging.error(f"Failed to copy to clipboard: Command returned non-zero exit status {process.returncode}")
-                return
-            if config.get('tree'):
-                logging.info(f"✨ File and function tree copied to clipboard! ({content_size:,} characters, {token_count:,} tokens)")
-            else:
-                logging.info(f"Content copied to clipboard ({content_size:,} characters, {token_count:,} tokens)")
-        except subprocess.CalledProcessError as e:
-            logging.error(f"Failed to copy to clipboard: {str(e).rstrip('.')}")
-        except UnicodeEncodeError as e:
-            logging.error(f"Failed to copy to clipboard: {e}")
-        except Exception as e:
-            logging.error(f"Failed to copy to clipboard: {e}")
-    elif config.get('stdout'):
-        print(content)
-        logging.info(f"Content size: {content_size:,} characters, {token_count:,} tokens")
-
-def should_process_file(file_path: str, config: Dict) -> bool:
-    """Check if a file should be processed based on configuration.
-
-    Args:
-        file_path: Path to file to check (can be absolute or relative)
-        config: Configuration dictionary
-
-    Returns:
-        True if file should be processed, False otherwise
-    """
-    if config is None:
-        config = {}
-
-    # Ensure we have absolute path
-    if not os.path.isabs(file_path):
-        file_path = os.path.abspath(file_path)
-
-    # Check if file exists
-    if not os.path.exists(file_path):
-        logging.debug(f"File does not exist: {file_path}")
-        return False
-
-    # Get file extension
-    _, ext = os.path.splitext(file_path)
-    ext = ext.lower()
-
-    # Check file extension
-    file_extensions = config.get('fileExtensions', [])
-    if file_extensions and ext not in file_extensions:
-        logging.debug(f"Excluded by extension: {file_path}")
-        return False
-
-    return True
-
-def process_files(files: List[str], config: Dict = None) -> str:
-    """Process files and return markdown output.
-
-    Args:
-        files: List of files to process
-        config: Configuration dictionary
-
-    Returns:
-        Markdown formatted output
-    """
-    if config is None:
-        config = {}
-
-    # Process files
-    processed_files = {}
-    for file in files:
-        if should_process_file(file, config):
-            try:
-                result = process_file(file, config)
-                if result:  # Only add if we got a result
-                    processed_files[file] = result
-            except Exception as e:
-                logging.error(f"Error processing {file}: {e}")
-
-    if not processed_files:
-        return "No files to process"
-
-    # Format the content
-    content = format_content(processed_files, config)
-    
-    # Write output
-    if content:
-        write_output(content, config)
-        
-    return content
-
-def format_tree(files: List[str]) -> str:
-    """Format a list of file paths into a tree-like string representation.
-    
-    Args:
-        files: List of file paths to format
-        
-    Returns:
-        A string representation of the directory tree
-    """
-    if not files:
-        return ''
-        
-    # Convert absolute paths to relative paths
-    cwd = os.getcwd()
-    rel_files = [os.path.relpath(f, cwd).replace(os.sep, '/') for f in files]
-    
-    # Build tree structure
-    tree = {}
-    for file_path in rel_files:
-        current = tree
-        parts = file_path.split('/')
-        for part in parts[:-1]:  # Process directories
-            if part not in current:
-                current[part] = {}
-            current = current[part]
-        current[parts[-1]] = None  # Add file as leaf node
-    
-    # Convert tree to string
-    return format_tree_string(tree).rstrip()
-
-def format_tree_string(tree: Dict, prefix: str = '', is_last: bool = True) -> str:
-    """Format a tree dictionary into a string representation.
-
-    Args:
-        tree: Dictionary representing the tree structure
-        prefix: Current line prefix for formatting
-        is_last: Whether this is the last item in current level
-
-    Returns:
-        A string representation of the tree
-    """
-    if not tree:
-        return ''
-
-    output = []
-    items = list(tree.items())
-
-    for i, (name, subtree) in enumerate(items):
-        is_last_item = i == len(items) - 1
-        connector = '└── ' if is_last_item else '├── '
-        new_prefix = prefix + ('    ' if is_last_item else '│   ')
-
-        output.append(prefix + connector + name)
-        if subtree is not None:  # If it's a directory
-            output.append(format_tree_string(subtree, new_prefix, is_last_item))
-
-    return '\n'.join(filter(None, output))
-
-def get_language_from_ext(ext: str) -> str:
-    """Get language name from file extension."""
-    ext_to_lang = {
-        '.py': 'python',
-        '.js': 'javascript',
-        '.jsx': 'javascript',
-        '.ts': 'typescript',
-        '.tsx': 'typescript',
-        '.java': 'java',
-        '.cpp': 'cpp',
-        '.c': 'c',
-        '.h': 'c',
-        '.hpp': 'cpp',
-        '.go': 'go',
-        '.rs': 'rust',
-        '.rb': 'ruby',
-        '.php': 'php',
-        '.cs': 'csharp',
-        '.swift': 'swift',
-        '.kt': 'kotlin',
-        '.scala': 'scala',
-        '.m': 'objectivec',
-        '.mm': 'objectivec',
-        '.sh': 'bash',
-        '.bash': 'bash',
-        '.zsh': 'bash',
-        '.fish': 'fish',
-        '.sql': 'sql',
-        '.r': 'r',
-        '.json': 'json',
-        '.yaml': 'yaml',
-        '.yml': 'yaml',
-        '.xml': 'xml',
-        '.html': 'html',
-        '.css': 'css',
-        '.scss': 'scss',
-        '.less': 'less',
-        '.md': 'markdown',
-        '.rst': 'rst',
-        '.tex': 'tex',
-        '.dockerfile': 'dockerfile',
-        '.toml': 'toml',
-        '.ini': 'ini',
-        '.cfg': 'ini',
-        '.conf': 'ini'
-    }
-    return ext_to_lang.get(ext.lower(), '')
+        logging.error(f"Failed to read file {file_path}: {e}")
+        return None
 
 def cpai(args, cli_options):
-    """Main function to process files and generate output."""
-    logging.debug("Starting cpai function")
+    """Main function for the cpai tool."""
+    # Configure logging
+    configure_logging(cli_options.get('debug', False))
     
-    # Convert args to list if it's a single string
-    if isinstance(args, str):
-        args = [args]
-    
-    # If no args provided, use current directory
-    if not args:
-        args = ['.']
-    
-    # Get the current working directory
-    cwd = os.getcwd()
-    logging.debug(f"Current working directory: {cwd}")
-    
-    # Convert relative paths to absolute paths
-    target_dirs = []
-    target_files = []
-    for arg in args:
-        if os.path.isabs(arg):
-            abs_path = arg
-        else:
-            abs_path = os.path.abspath(os.path.join(cwd, arg))
-        
-        if os.path.isfile(abs_path):
-            target_files.append(abs_path)
-        else:
-            target_dirs.append(abs_path)
-        logging.debug(f"Added target: {abs_path}")
-    
-    # Read configuration
+    # Read config and merge with CLI options
     config = read_config()
-    
-    # Update config with CLI options
     config.update(cli_options)
     
-    # Get list of files to process
-    all_files = []
-    
-    # For tree view, we want to include all files by default
-    include_all = config.get('include_all', False) or config.get('tree', False)
-    
-    # First add any directly specified files
-    for file_path in target_files:
-        if should_process_file(file_path, config):
-            all_files.append(file_path)
-    
-    # Then add files from directories
-    for directory in target_dirs:
-        files = get_files(directory, config, include_all=include_all)
-        all_files.extend(files)  # Already absolute paths
-    
-    if not all_files:
-        logging.warning("No files found to process")
-        return
-    
+    # Get files to process
+    files = []
+    for path in args:
+        if os.path.isdir(path):
+            files.extend(get_files(path, config))
+        else:
+            files.append(path)
+            
+    if not files:
+        logging.warning("No files found to process.")
+        return None
+        
     # Add files to config for reference
-    config['files'] = all_files
-    
+    config['files'] = files
+        
     # Process files
-    processed_files = {}
-    for file_path in all_files:
-        if should_process_file(file_path, config):
-            try:
-                result = process_file(file_path, config)
-                if result:  # Only add if we got a result
-                    processed_files[file_path] = result
-            except Exception as e:
-                logging.error(f"Error processing {file_path}: {e}")
+    processed_files = process_files(files, config)
     
-    if not processed_files:
-        logging.warning("No files processed successfully")
-        return
-    
-    # Format the content
+    # Format content
     content = format_content(processed_files, config)
     
     # Write output
-    if content:
-        write_output(content, config)
-        
+    write_output(content, config)
+    
     return content
 
 def main():
-    import logging
-    parser = argparse.ArgumentParser(description="Concatenate multiple files into a single markdown text string")
-    parser.add_argument('files', nargs='*', help="Files or directories to process")
-    parser.add_argument('-f', '--file', nargs='?', const=True, help="Output to file. Optionally specify filename.")
-    parser.add_argument('-n', '--noclipboard', action='store_true', help="Don't copy to clipboard")
-    parser.add_argument('--stdout', action='store_true', help="Output to stdout instead of clipboard")
-    parser.add_argument('-a', '--all', action='store_true', help="Include all files (including tests, configs, etc.)")
-    parser.add_argument('-x', '--exclude', nargs='+', help="Additional patterns to exclude")
-    parser.add_argument('--debug', action='store_true', help="Enable debug logging")
-    parser.add_argument('--tree', action='store_true', help="Display a tree view of the directory structure")
+    """Entry point for the cpai tool."""
+    # Parse command-line arguments
+    args = parse_arguments()
+    
+    # Configure logging
+    configure_logging(args.debug)
+    
+    # Read config and merge with CLI options
+    config = read_config()
+    config = merge_cli_options(args, config)
+    
+    # Call main function
+    cpai(args.files, config)
 
-    try:
-        args = parser.parse_args()
-        configure_logging(args.debug)
-
-        cli_options = {
-            'outputFile': args.file if args.file is not None else False,
-            'usePastebin': not args.noclipboard and not args.stdout,
-            'include_all': args.all,
-            'exclude': args.exclude,
-            'tree': args.tree,
-            'stdout': args.stdout
-        }
-
-        logging.debug("Starting main function")
-        cpai(args.files, cli_options)
-    except (KeyboardInterrupt, SystemExit):
-        # Handle both KeyboardInterrupt and SystemExit
-        logging.error("Operation cancelled by user")
-        sys.exit(1)
-    except Exception as e:
-        logging.error(f"An error occurred: {e}", exc_info=True)
-        sys.exit(1)
+if __name__ == '__main__':
+    main()

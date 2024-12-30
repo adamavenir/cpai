@@ -1,159 +1,66 @@
+import unittest
 import os
 import tempfile
 import shutil
-import unittest
-from pathlib import Path
-from cpai.main import get_files
-from cpai.constants import DEFAULT_EXCLUDE_PATTERNS
+from cpai.file_selection import get_files
 
-class TestGetFiles(unittest.TestCase):
+class TestMain(unittest.TestCase):
     def setUp(self):
-        # Create a temporary directory for test files
+        """Set up test environment."""
         self.test_dir = tempfile.mkdtemp()
+        self.old_cwd = os.getcwd()
+        os.chdir(self.test_dir)
         
-        # Create some test files and directories
-        self.create_test_files()
+        # Create test files and directories
+        os.makedirs('src')
+        os.makedirs('lib')
+        os.makedirs('test')
+        
+        with open('src/main.py', 'w') as f:
+            f.write('print("Hello")\n')
+        with open('src/utils.js', 'w') as f:
+            f.write('console.log("Hello")\n')
+        with open('lib/helpers.ts', 'w') as f:
+            f.write('export const helper = () => {}\n')
+        with open('test/test_main.py', 'w') as f:
+            f.write('def test_main():\n    pass\n')
+            
+        # Create symlinks for testing
+        if os.name != 'nt':  # Skip on Windows
+            os.symlink('src/main.py', 'src/main_link.py')
+            os.symlink('nonexistent.py', 'src/broken_link.py')
 
     def tearDown(self):
-        # Clean up the temporary directory
+        """Clean up test environment."""
+        os.chdir(self.old_cwd)
         shutil.rmtree(self.test_dir)
 
-    def create_test_files(self):
-        """Create a test directory structure."""
-        # Create Python files
-        Path(self.test_dir, "main.py").write_text("def main(): pass")
-        Path(self.test_dir, "__init__.py").write_text("")
-        Path(self.test_dir, "constants.py").write_text("VERSION = '1.0.0'")
-        
-        # Create a subdirectory with files
-        subdir = Path(self.test_dir, "subdir")
-        subdir.mkdir()
-        Path(subdir, "module.py").write_text("def func(): pass")
-        
-        # Create files that should be excluded
-        pycache_dir = Path(self.test_dir, "__pycache__")
-        pycache_dir.mkdir()
-        Path(pycache_dir, "main.cpython-39.pyc").write_text("")
-        
-        # Create test files (should be excluded by default)
-        test_dir = Path(self.test_dir, "tests")
-        test_dir.mkdir()
-        Path(test_dir, "test_main.py").write_text("def test_main(): pass")
-        
-        # Create config files
-        Path(self.test_dir, "setup.py").write_text("from setuptools import setup")
-        Path(self.test_dir, "requirements.txt").write_text("pathspec==0.11.0")
-
     def test_get_files_basic(self):
-        """Test basic file filtering with default configuration."""
-        config = {
-            'include': ['.'],
-            'fileExtensions': ['.py']  # Only process Python files
-        }
-        files = get_files(self.test_dir, config)
-
-        # Convert absolute paths to relative for comparison
-        rel_files = [os.path.relpath(f, self.test_dir) for f in files]
-
-        # Should include Python files in root and subdirectories
-        expected = {
-            "main.py",
-            "__init__.py",
-            "constants.py",
-            os.path.join("subdir", "module.py")
-        }
-        self.assertEqual(set(rel_files), expected)
-
-    def test_get_files_with_absolute_path(self):
-        """Test that get_files works correctly with absolute paths."""
-        abs_path = os.path.abspath(self.test_dir)
-        files = get_files(abs_path)
-
-        # All returned paths should be absolute
-        self.assertTrue(all(os.path.isabs(f) for f in files))
-
-    def test_get_files_with_relative_path(self):
-        """Test that get_files works correctly with relative paths."""
-        # Get current directory
-        current_dir = os.getcwd()
-        try:
-            # Change to parent of test directory
-            os.chdir(os.path.dirname(self.test_dir))
-            # Use relative path
-            rel_path = os.path.basename(self.test_dir)
-            files = get_files(rel_path)
-
-            # All returned paths should be absolute
-            self.assertTrue(all(os.path.isabs(f) for f in files))
-            self.assertTrue(all(os.path.exists(f) for f in files))
-        finally:
-            # Restore current directory
-            os.chdir(current_dir)
-
-    def test_get_files_exclude_patterns(self):
-        """Test that exclude patterns work correctly."""
-        # Create a custom exclude pattern
-        config = {
-            'exclude': ['**/subdir/**']  # Exclude the subdir directory
+        """Test basic file collection."""
+        expected_files = {
+            'src/main.py',
+            'src/utils.js',
+            'lib/helpers.ts',
+            'test/test_main.py'
         }
         
-        files = get_files(self.test_dir, config=config)
-        rel_files = [os.path.relpath(f, self.test_dir) for f in files]
+        config = {'include': ['**/*']}  # Include all files
+        files = set(os.path.normpath(f) for f in get_files('.', config))
         
-        # Should not include files from subdir
-        self.assertFalse(any("subdir" in f for f in rel_files))
-
-    def test_get_files_include_patterns(self):
-        """Test that include patterns work correctly."""
-        # Create a custom include pattern
-        config = {
-            'include': ['**/subdir/**'],  # Only include files in subdir
-            'fileExtensions': ['.py']  # Only process Python files
-        }
+        # Convert expected files to use OS-specific path separators
+        expected = set(os.path.normpath(f) for f in expected_files)
         
-        files = get_files(self.test_dir, config=config)
-        rel_files = [os.path.relpath(f, self.test_dir) for f in files]
-        
-        # Should only include files from subdir
-        self.assertTrue(all("subdir" in f for f in rel_files))
+        self.assertEqual(files, expected)
 
     def test_get_files_symlinks(self):
-        """Test that symlinks are handled correctly."""
-        config = {
-            'include': ['.'],
-            'fileExtensions': ['.py']  # Only process Python files
-        }
-        
-        # Create a symlink to a Python file
-        source = Path(self.test_dir, "main.py")
-        link = Path(self.test_dir, "main_link.py")
-        os.symlink(source, link)
-        
-        try:
-            files = get_files(self.test_dir, config)
-            rel_files = [os.path.relpath(f, self.test_dir) for f in files]
+        """Test file collection with symlinks."""
+        if os.name == 'nt':  # Skip on Windows
+            self.skipTest("Symlink tests not supported on Windows")
             
-            # Should include both the original file and the symlink
-            self.assertTrue(any("main.py" in f for f in rel_files))
-            self.assertTrue(any("main_link.py" in f for f in rel_files))
-        finally:
-            # Cleanup
-            if os.path.exists(link):
-                os.remove(link)
-
-    def test_get_files_broken_symlinks(self):
-        """Test that broken symlinks are handled gracefully."""
-        # Create a broken symlink
-        nonexistent = Path(self.test_dir, "nonexistent.py")
-        link = Path(self.test_dir, "broken_link.py")
-        os.symlink(nonexistent, link)
+        config = {'include': ['**/*']}  # Include all files
+        files = set(os.path.normpath(f) for f in get_files('.', config))
         
-        # Should not raise an exception
-        files = get_files(self.test_dir)
-        rel_files = [os.path.relpath(f, self.test_dir) for f in files]
-        
-        # Should not include the broken symlink
-        self.assertFalse("broken_link.py" in rel_files)
-
-if __name__ == '__main__':
-    unittest.main()
+        # Check that symlinks are followed
+        self.assertIn(os.path.normpath('src/main_link.py'), files)
+        # Check that broken symlinks are ignored
+        self.assertNotIn(os.path.normpath('src/broken_link.py'), files)

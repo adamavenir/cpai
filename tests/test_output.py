@@ -1,7 +1,8 @@
 import os
 import pytest
 import shutil
-from cpai.main import process_files, generate_tree
+from cpai.main import process_files
+from cpai.formatter import generate_tree
 from cpai.outline.base import OutlineExtractor
 
 # Test data directory
@@ -117,8 +118,8 @@ def test_file_processing():
     
     output = process_files(test_files)
     assert 'models.py' in output
-    assert 'class' in output.lower()
-    assert 'def' in output.lower()
+    assert 'class' in output['models.py']['content'].lower()
+    assert 'def' in output['models.py']['content'].lower()
 
 def test_exclusion_patterns():
     """Test that exclusion patterns work correctly."""

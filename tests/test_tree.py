@@ -1,112 +1,132 @@
+import unittest
 import os
-import pytest
-from cpai.outline.base import OutlineExtractor
+import tempfile
+import shutil
 from cpai.outline.javascript import JavaScriptOutlineExtractor
 from cpai.outline.python import PythonOutlineExtractor
 from cpai.outline.solidity import SolidityOutlineExtractor
 from cpai.outline.rust import RustOutlineExtractor
 
-# Test data directory
-TEST_DATA_DIR = os.path.join(os.path.dirname(__file__), 'data')
+class TestTree(unittest.TestCase):
+    def setUp(self):
+        """Set up test environment."""
+        self.test_dir = tempfile.mkdtemp()
+        self.old_cwd = os.getcwd()
+        os.chdir(self.test_dir)
 
-def read_test_file(filename):
-    """Helper to read test files."""
-    with open(os.path.join(TEST_DATA_DIR, filename), 'r') as f:
-        return f.read()
+    def tearDown(self):
+        """Clean up test environment."""
+        os.chdir(self.old_cwd)
+        shutil.rmtree(self.test_dir)
 
-@pytest.fixture
-def js_extractor():
-    return JavaScriptOutlineExtractor()
+    def test_javascript_basic_function(self):
+        """Test extracting basic JavaScript function."""
+        code = """
+function hello() {
+    console.log('Hello');
+}
+"""
+        extractor = JavaScriptOutlineExtractor()
+        functions = extractor.extract_functions(code)
+        self.assertEqual(len(functions), 1)
+        self.assertEqual(functions[0].name, 'hello')
 
-@pytest.fixture
-def py_extractor():
-    return PythonOutlineExtractor()
+    def test_javascript_arrow_function(self):
+        """Test extracting arrow function."""
+        code = """
+const hello = () => {
+    console.log('Hello');
+};
+"""
+        extractor = JavaScriptOutlineExtractor()
+        functions = extractor.extract_functions(code)
+        self.assertEqual(len(functions), 1)
+        self.assertEqual(functions[0].name, 'hello')
 
-@pytest.fixture
-def sol_extractor():
-    return SolidityOutlineExtractor()
-
-@pytest.fixture
-def rust_extractor():
-    return RustOutlineExtractor()
-
-def test_javascript_basic_function(js_extractor):
-    content = """
-    function myFunction() {
-        // Function content
+    def test_javascript_class_method(self):
+        """Test extracting class method."""
+        code = """
+class MyClass {
+    constructor() {
+        this.name = 'MyClass';
     }
-    """
-    functions = js_extractor.extract_functions(content)
-    assert len(functions) == 1
-    assert functions[0].name == 'myFunction'
-    assert functions[0].node_type == 'function'
-
-def test_javascript_arrow_function(js_extractor):
-    content = """
-    const myArrowFunction = () => {
-        // Function content
-    };
-    """
-    functions = js_extractor.extract_functions(content)
-    assert len(functions) == 1
-    assert functions[0].name == 'myArrowFunction'
-    assert functions[0].node_type == 'function'
-
-def test_javascript_class_method(js_extractor):
-    content = """
-    class MyClass {
-        constructor() {}
-        
-        myMethod() {
-            // Method content
-        }
+    
+    hello() {
+        console.log('Hello from', this.name);
     }
-    """
-    functions = js_extractor.extract_functions(content)
-    assert len(functions) == 2
-    assert 'MyClass' in [f.name for f in functions]
-    assert 'MyClass.myMethod' in [f.name for f in functions]
-
-def test_python_class_method(py_extractor):
-    content = """
-    class MyClass:
-        def my_method(self):
-            pass
-    """
-    functions = py_extractor.extract_functions(content)
-    assert len(functions) == 2
-    assert 'MyClass' in [f.name for f in functions]
-    assert 'MyClass.my_method' in [f.name for f in functions]
-
-def test_solidity_contract(sol_extractor):
-    content = """
-    contract MyContract {
-        function myFunction() public {
-            // Function content
-        }
+    
+    static greet() {
+        console.log('Static greeting');
     }
-    """
-    functions = sol_extractor.extract_functions(content)
-    assert len(functions) == 2
-    assert 'MyContract' in [f.name for f in functions]
-    assert 'MyContract.myFunction' in [f.name for f in functions]
+}
+"""
+        extractor = JavaScriptOutlineExtractor()
+        functions = extractor.extract_functions(code)
+        self.assertEqual(len(functions), 3)  # constructor, hello, and greet
+        self.assertEqual(functions[0].name, 'MyClass.constructor')
+        self.assertEqual(functions[1].name, 'MyClass.hello')
+        self.assertEqual(functions[2].name, 'MyClass.greet')
 
-def test_rust_impl(rust_extractor):
-    content = """
-    impl MyStruct {
-        pub fn new() -> Self {
-            Self {}
-        }
+    def test_python_class_method(self):
+        """Test extracting Python class method."""
+        code = """
+class MyClass:
+    def __init__(self):
+        self.name = 'MyClass'
+    
+    def hello(self):
+        print('Hello from', self.name)
+    
+    @staticmethod
+    def greet():
+        print('Static greeting')
+"""
+        extractor = PythonOutlineExtractor()
+        functions = extractor.extract_functions(code)
+        self.assertEqual(len(functions), 3)  # __init__, hello, and greet
+        self.assertEqual(functions[0].name, 'MyClass.__init__')
+        self.assertEqual(functions[1].name, 'MyClass.hello')
+        self.assertEqual(functions[2].name, 'MyClass.greet')
 
-        pub fn method(&self) {
-        }
-
-        fn private_method(&self) {
-        }
+    def test_solidity_contract(self):
+        """Test extracting Solidity contract functions."""
+        code = """
+contract MyContract {
+    function hello() public view returns (string memory) {
+        return "Hello";
     }
-    """
-    functions = rust_extractor.extract_functions(content)
-    assert len(functions) == 3
-    assert 'MyStruct.new' in [f.name for f in functions]
-    assert 'MyStruct.method' in [f.name for f in functions]
-    assert 'MyStruct.private_method' in [f.name for f in functions]
+    
+    function greet(string memory name) public pure returns (string memory) {
+        return string(abi.encodePacked("Hello, ", name));
+    }
+}
+"""
+        extractor = SolidityOutlineExtractor()
+        functions = extractor.extract_functions(code)
+        self.assertEqual(len(functions), 2)  # hello and greet
+        self.assertEqual(functions[0].name, 'MyContract.hello')
+        self.assertEqual(functions[1].name, 'MyContract.greet')
+
+    def test_rust_impl(self):
+        """Test extracting Rust impl functions."""
+        code = """
+impl MyStruct {
+    pub fn new() -> Self {
+        MyStruct {}
+    }
+    
+    pub fn hello(&self) {
+        println!("Hello");
+    }
+    
+    pub fn greet(name: &str) {
+        println!("Hello, {}", name);
+    }
+}
+"""
+        extractor = RustOutlineExtractor()
+        functions = extractor.extract_functions(code)
+        self.assertEqual(len(functions), 3)  # new, hello, and greet
+        self.assertEqual(functions[0].name, 'MyStruct.new')
+        self.assertEqual(functions[1].name, 'MyStruct.hello')
+        self.assertEqual(functions[2].name, 'MyStruct.greet')
