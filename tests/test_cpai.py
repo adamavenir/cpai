@@ -17,8 +17,10 @@ from cpai.main import (
     main,
     configure_logging,
     DEFAULT_EXCLUDE_PATTERNS,
-    DEFAULT_CHUNK_SIZE
+    DEFAULT_CHUNK_SIZE,
+    tokenize
 )
+import tiktoken
 
 class TestCPAI(unittest.TestCase):
     def setUp(self):
@@ -547,6 +549,153 @@ class TestCPAI(unittest.TestCase):
         # This should not raise a TypeError
         files = get_files('.', config)
         self.assertIsInstance(files, list)
+
+    def test_tokenize_with_tiktoken(self):
+        """Test tokenization using tiktoken"""
+        text = "Hello, world! This is a test."
+        tokens = tokenize(text)
+        # Get expected tokens using tiktoken directly
+        encoding = tiktoken.get_encoding("cl100k_base")
+        expected_tokens = encoding.encode(text)
+        self.assertEqual(tokens, expected_tokens)
+
+    @patch('tiktoken.get_encoding')
+    def test_tokenize_fallback(self, mock_get_encoding):
+        """Test tokenization fallback when tiktoken fails"""
+        # Make tiktoken fail
+        mock_get_encoding.side_effect = Exception("Tiktoken error")
+        
+        text = "Hello, world! This is a test."
+        tokens = tokenize(text)
+        # Expected tokens from fallback tokenization
+        expected_tokens = ['Hello', ',', 'world', '!', 'This', 'is', 'a', 'test', '.']
+        self.assertEqual(tokens, expected_tokens)
+
+    def test_write_output_formatting(self):
+        """Test number formatting in write output"""
+        config = {
+            'outputFile': False,
+            'usePastebin': True,
+            'chunkSize': 1000,
+        }
+        content = "x" * 1234  # Create content with 1,234 characters
+        
+        # Mock the tokenize function to return a known number of tokens
+        with patch('cpai.main.tokenize') as mock_tokenize, \
+             patch('subprocess.Popen') as mock_popen, \
+             patch('logging.info') as mock_info:
+            
+            # Setup mock tokenize to return 567 tokens
+            mock_tokenize.return_value = ['x'] * 567
+            
+            # Setup mock Popen
+            mock_process = MagicMock()
+            mock_process.returncode = 0
+            mock_popen.return_value = mock_process
+            
+            write_output(content, config)
+            
+            # Verify the formatted numbers in the output
+            mock_info.assert_called_with("Content copied to clipboard (1,234 characters, 567 tokens)")
+
+    def test_write_output_large_numbers(self):
+        """Test formatting of large numbers in write output"""
+        config = {
+            'outputFile': False,
+            'usePastebin': True,
+            'chunkSize': 1000000,
+        }
+        content = "x" * 123456  # Create content with 123,456 characters
+        
+        # Mock the tokenize function to return a known number of tokens
+        with patch('cpai.main.tokenize') as mock_tokenize, \
+             patch('subprocess.Popen') as mock_popen, \
+             patch('logging.info') as mock_info:
+            
+            # Setup mock tokenize to return 34,567 tokens
+            mock_tokenize.return_value = ['x'] * 34567
+            
+            # Setup mock Popen
+            mock_process = MagicMock()
+            mock_process.returncode = 0
+            mock_popen.return_value = mock_process
+            
+            write_output(content, config)
+            
+            # Verify the formatted numbers in the output
+            mock_info.assert_called_with("Content copied to clipboard (123,456 characters, 34,567 tokens)")
+
+    def test_write_output_tree_mode(self):
+        """Test formatting in tree mode"""
+        config = {
+            'outputFile': False,
+            'usePastebin': True,
+            'chunkSize': 1000,
+            'tree': True
+        }
+        content = "x" * 1234
+        
+        # Mock the tokenize function to return a known number of tokens
+        with patch('cpai.main.tokenize') as mock_tokenize, \
+             patch('subprocess.Popen') as mock_popen, \
+             patch('logging.info') as mock_info:
+            
+            # Setup mock tokenize to return 567 tokens
+            mock_tokenize.return_value = ['x'] * 567
+            
+            # Setup mock Popen
+            mock_process = MagicMock()
+            mock_process.returncode = 0
+            mock_popen.return_value = mock_process
+            
+            write_output(content, config)
+            
+            # Verify the formatted numbers in the output with tree mode message
+            mock_info.assert_called_with("✨ File and function tree copied to clipboard! (1,234 characters, 567 tokens)")
+
+    def test_write_output_to_file_with_formatting(self):
+        """Test number formatting when writing to file"""
+        with patch('builtins.open', unittest.mock.mock_open()), \
+             patch('logging.info') as mock_info:
+            
+            config = {
+                'outputFile': 'test_output.md',
+                'usePastebin': False,
+                'chunkSize': 1000,
+            }
+            content = "x" * 1234
+            
+            # Mock tokenize to return a known number of tokens
+            with patch('cpai.main.tokenize') as mock_tokenize:
+                mock_tokenize.return_value = ['x'] * 567
+                
+                write_output(content, config)
+                
+                # Verify the formatted numbers in the output
+                mock_info.assert_called_with("Content written to test_output.md (1,234 characters, 567 tokens)")
+
+    def test_write_output_stdout_with_formatting(self):
+        """Test number formatting in stdout mode"""
+        config = {
+            'outputFile': False,
+            'usePastebin': False,
+            'stdout': True,
+            'chunkSize': 1000,
+        }
+        content = "x" * 1234
+        
+        # Mock tokenize to return a known number of tokens
+        with patch('cpai.main.tokenize') as mock_tokenize, \
+             patch('builtins.print') as mock_print, \
+             patch('logging.info') as mock_info:
+            
+            mock_tokenize.return_value = ['x'] * 567
+            
+            write_output(content, config)
+            
+            # Verify content is printed and numbers are formatted
+            mock_print.assert_called_with(content)
+            mock_info.assert_called_with("Content size: 1,234 characters, 567 tokens")
 
 if __name__ == '__main__':
     unittest.main()

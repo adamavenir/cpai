@@ -12,6 +12,7 @@ from typing import List, Dict, Any, Optional
 from .outline.base import FunctionInfo, OutlineExtractor
 from .outline import EXTRACTORS
 import pathspec
+import tiktoken
 from .constants import (
     DEFAULT_CHUNK_SIZE,
     DEFAULT_EXCLUDE_PATTERNS,
@@ -513,14 +514,27 @@ def get_extractor_for_ext(ext: str) -> Optional[OutlineExtractor]:
     }
     return extractors.get(ext.lower())
 
+def tokenize(text: str) -> List[int]:
+    """Tokenize text using OpenAI's tiktoken library.
+    Uses cl100k_base encoding which is used for gpt-4, text-embedding-ada-002, etc."""
+    try:
+        encoding = tiktoken.get_encoding("cl100k_base")
+        return encoding.encode(text)
+    except Exception as e:
+        logging.warning(f"Failed to use tiktoken for tokenization: {e}. Falling back to simple tokenization.")
+        # Fallback to simple tokenization
+        return re.findall(r'\b\w+\b|[^\w\s]', text)
+
 def write_output(content, config):
     """Write output to clipboard and/or file."""
-    # Check content size
+    # Check content size and tokens
     content_size = len(content)
+    tokens = tokenize(content)
+    token_count = len(tokens)
     chunk_size = config.get('chunkSize', 90000)
     
     if content_size > chunk_size:
-        print(f"\nWarning: Content size ({content_size} characters) exceeds the maximum size ({chunk_size} characters).")
+        print(f"\nWarning: Content size ({content_size:,} characters) exceeds the maximum size ({chunk_size:,} characters).")
     
     # Write to file if specified
     if config.get('outputFile'):
@@ -528,7 +542,7 @@ def write_output(content, config):
         try:
             with open(output_file, 'w', encoding='utf-8') as f:
                 f.write(content)
-            logging.info(f"Content written to {output_file}")
+            logging.info(f"Content written to {output_file} ({content_size:,} characters, {token_count:,} tokens)")
         except Exception as e:
             logging.error(f"Failed to write to file: {e}")
     
@@ -541,9 +555,9 @@ def write_output(content, config):
                 logging.error(f"Failed to copy to clipboard: Command returned non-zero exit status {process.returncode}")
                 return
             if config.get('tree'):
-                logging.info("✨ File and function tree copied to clipboard!")
+                logging.info(f"✨ File and function tree copied to clipboard! ({content_size:,} characters, {token_count:,} tokens)")
             else:
-                logging.info("Content copied to clipboard")
+                logging.info(f"Content copied to clipboard ({content_size:,} characters, {token_count:,} tokens)")
         except subprocess.CalledProcessError as e:
             logging.error(f"Failed to copy to clipboard: {str(e).rstrip('.')}")
         except UnicodeEncodeError as e:
@@ -552,6 +566,7 @@ def write_output(content, config):
             logging.error(f"Failed to copy to clipboard: {e}")
     elif config.get('stdout'):
         print(content)
+        logging.info(f"Content size: {content_size:,} characters, {token_count:,} tokens")
 
 def should_process_file(file_path: str, config: Dict) -> bool:
     """Check if a file should be processed based on configuration.

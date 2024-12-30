@@ -5,3 +5,4 @@ pytest-cov>=4.0.0  # For test coverage reporting
 black>=22.0.0  # For code formatting
 flake8>=4.0.0  # For linting
 mypy>=0.990  # For type checking
+tiktoken>=0.5.1  # For accurate token counting
