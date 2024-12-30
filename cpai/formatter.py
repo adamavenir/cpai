@@ -76,7 +76,16 @@ def format_functions_as_tree(functions: List[FunctionInfo], indent: str = '', ex
             parent, name = func.name.rsplit('.', 1)
             if parent not in grouped:
                 grouped[parent] = []
-            grouped[parent].append(func._replace(name=name))  # Store with short name
+            # Create a new FunctionInfo instance with the short name
+            grouped[parent].append(FunctionInfo(
+                name=name,
+                line_number=func.line_number,
+                parameters=func.parameters,
+                leading_comment=func.leading_comment,
+                is_export=func.is_export,
+                is_default_export=func.is_default_export,
+                node_type=func.node_type
+            ))
         else:
             standalone.append(func)
             

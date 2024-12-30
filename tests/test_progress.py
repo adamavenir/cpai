@@ -16,25 +16,30 @@ class TestProgressIndicator(unittest.TestCase):
 
     def test_start_stop(self):
         """Test starting and stopping the progress indicator."""
-        progress = ProgressIndicator()
-        
+        message = "Processing"
+        progress = ProgressIndicator(message)
+
         with patch('sys.stdout.write') as mock_write:
             progress.start()
             self.assertTrue(progress.running)
             self.assertIsNotNone(progress.thread)
-            
+
             # Give it time to make at least one update
             time.sleep(0.6)
-            
+
             progress.stop()
             self.assertFalse(progress.running)
-            
+
             # Should have written dots
             mock_write.assert_called()
             # Should have cleared the line at the end
             self.assertEqual(
+                mock_write.call_args_list[-2][0][0],
+                '\r' + ' ' * (len(message) + 3)
+            )
+            self.assertEqual(
                 mock_write.call_args_list[-1][0][0],
-                '\r' + ' ' * (len("Processing") + 3) + '\r'
+                '\r'
             )
 
     def test_custom_message(self):

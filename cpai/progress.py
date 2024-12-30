@@ -24,7 +24,7 @@ class ProgressIndicator:
                 break
             sys.stdout.write(f'\r{self.message}{dots}')
             sys.stdout.flush()
-            time.sleep(0.5)
+            time.sleep(0.25)  # Faster animation
     
     def start(self):
         """Start displaying the progress indicator."""

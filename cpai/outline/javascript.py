@@ -75,15 +75,12 @@ class JavaScriptOutlineExtractor(OutlineExtractor):
                                 is_default_export=func.get('isDefaultExport', False)
                             ))
                 
-                # Second pass: add methods and functions
+                # Second pass: process functions and methods
                 for func in parsed:
-                    if func.get('nodeType') != 'class':
+                    if func.get('nodeType') in ('function', 'method'):
                         name = func['name']
-                        # If this is a method, use just the method name
-                        if func.get('nodeType') == 'method' and func.get('className'):
-                            # For test_tree.py, use prefixed names
-                            if is_tree_test:
-                                name = f"{func['className']}.{name}"
+                        if func.get('className'):
+                            name = f"{func['className']}.{name}"
                         functions.append(FunctionInfo(
                             name=name,
                             line_number=func.get('line', 0),
@@ -92,12 +89,14 @@ class JavaScriptOutlineExtractor(OutlineExtractor):
                             is_export=func.get('isExport', False),
                             is_default_export=func.get('isDefaultExport', False)
                         ))
+                
                 return functions
             else:
-                logging.error(f"Parser error: {stderr.decode()}")
+                logging.error(f"Parser failed: {stderr.decode()}")
                 return []
+                
         except Exception as e:
-            logging.error(f"Failed to parse JavaScript/TypeScript code: {e}")
+            logging.error(f"Failed to parse JavaScript/TypeScript: {e}")
             return []
 
     def format_function_for_tree(self, func: FunctionInfo) -> str:

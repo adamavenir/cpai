@@ -25,6 +25,7 @@ setup(
         "esprima>=4.0.0",
         "tiktoken>=0.5.1",
         "pathspec>=0.11.0",
+        "colorama>=0.4.6",
     ],
     entry_points={
         "console_scripts": [

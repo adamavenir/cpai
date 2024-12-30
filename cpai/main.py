@@ -16,7 +16,10 @@ from .constants import (
     DEFAULT_CHUNK_SIZE,
     DEFAULT_EXCLUDE_PATTERNS,
     CORE_SOURCE_PATTERNS,
-    DEFAULT_FILE_EXTENSIONS
+    DEFAULT_FILE_EXTENSIONS,
+    CLIPBOARD_ICON,
+    FILE_ICON,
+    STDOUT_ICON
 )
 from .file_selection import get_files, should_process_file, get_relative_path, should_match_pattern
 from .content_size import validate_content_size
@@ -38,9 +41,9 @@ def write_output(content, config):
     # Validate content size
     size_info = validate_content_size(content, config.get('chunkSize', DEFAULT_CHUNK_SIZE))
     
-    # Check content size
-    if size_info['exceeds_limit']:
-        print(f"\nWarning: Content size ({size_info['formatted_chars']} characters) exceeds the maximum size ({size_info['formatted_max_size']} characters).")
+    # Show compatibility info
+    print(size_info['compatibility'])
+    print()
     
     # Write to file if specified
     if config.get('outputFile'):
@@ -53,14 +56,14 @@ def write_output(content, config):
         rel_path = os.path.relpath(output_file)
         # Add newline before content message
         print()
-        logging.info(f"Content written to {rel_path} ({size_info['formatted_chars']} characters, {size_info['formatted_tokens']} tokens)")
+        logging.info(f"{FILE_ICON} {size_info['formatted_chars']} characters ({size_info['formatted_tokens']} tokens) written to {rel_path}")
         return
     
     # Print to stdout if specified
     if config.get('stdout', False):
         print(content)
         print()  # Add newline before size message
-        logging.info(f"Content size: {size_info['formatted_chars']} characters, {size_info['formatted_tokens']} tokens")
+        logging.info(f"{STDOUT_ICON} {size_info['formatted_chars']} characters ({size_info['formatted_tokens']} tokens)")
         return
     
     # Otherwise copy to clipboard
@@ -80,9 +83,9 @@ def write_output(content, config):
         # Log success with tree-specific message
         print()  # Add newline before content message
         if config.get('tree'):
-            logging.info(f"✨ File and function tree copied to clipboard! ({size_info['formatted_chars']} characters, {size_info['formatted_tokens']} tokens)")
+            logging.info(f"{CLIPBOARD_ICON} {size_info['formatted_chars']} characters ({size_info['formatted_tokens']} tokens) - tree copied to clipboard!")
         else:
-            logging.info(f"Content copied to clipboard ({size_info['formatted_chars']} characters, {size_info['formatted_tokens']} tokens)")
+            logging.info(f"{CLIPBOARD_ICON} {size_info['formatted_chars']} characters ({size_info['formatted_tokens']} tokens) copied to clipboard")
             
     except (subprocess.CalledProcessError, UnicodeEncodeError) as e:
         logging.error(f"Failed to copy to clipboard: {str(e)}")

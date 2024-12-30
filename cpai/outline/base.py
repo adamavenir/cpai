@@ -5,18 +5,16 @@ from typing import List, Optional
 import re
 
 
+@dataclass
 class FunctionInfo:
     """Class to store function information."""
-
-    def __init__(self, name, line_number=None, parameters=None, args=None, leading_comment=None, 
-                 is_export=False, is_default_export=False, node_type='function'):
-        self.name = name
-        self.line_number = line_number
-        self.parameters = parameters or args  # Support both parameters and args
-        self.leading_comment = leading_comment
-        self.is_export = is_export
-        self.is_default_export = is_default_export
-        self.node_type = node_type
+    name: str
+    line_number: Optional[int] = None
+    parameters: Optional[str] = None
+    leading_comment: Optional[str] = None
+    is_export: bool = False
+    is_default_export: bool = False
+    node_type: str = 'function'
 
     @staticmethod
     def is_valid_function_name(name):

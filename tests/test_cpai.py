@@ -17,7 +17,7 @@ from cpai.main import (
     configure_logging,
 )
 from cpai.constants import DEFAULT_EXCLUDE_PATTERNS, DEFAULT_CHUNK_SIZE
-from cpai.content_size import tokenize
+from cpai.content_size import validate_content_size
 from cpai.formatter import format_tree
 from cpai.progress import ProgressIndicator
 import tiktoken
@@ -339,20 +339,25 @@ class TestCPAI(unittest.TestCase):
 
     def test_progress_indicator(self):
         """Test progress indicator functionality."""
-        progress = ProgressIndicator("Testing")
-        
+        message = "Testing"
+        progress = ProgressIndicator(message)
+
         with patch('sys.stdout.write') as mock_write:
             progress.start()
             # Give it time to make at least one update
             time.sleep(1)
             progress.stop()
-            
+
             # Should have written to stdout at least once
             mock_write.assert_called()
             # Should have cleared the line at the end
             self.assertEqual(
+                mock_write.call_args_list[-2][0][0],
+                '\r' + ' ' * (len(message) + 3)
+            )
+            self.assertEqual(
                 mock_write.call_args_list[-1][0][0],
-                '\r' + ' ' * (len("Testing") + 3) + '\r'
+                '\r'
             )
 
     def test_progress_indicator_in_cpai(self):
