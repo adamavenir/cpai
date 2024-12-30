@@ -62,6 +62,7 @@ class MyClass {
 """
         extractor = JavaScriptOutlineExtractor()
         functions = extractor.extract_functions(code)
+        print("\nFound functions:", [f.name for f in functions])  # Debug output
         self.assertEqual(len(functions), 3)  # constructor, hello, and greet
         self.assertEqual(functions[0].name, 'MyClass.constructor')
         self.assertEqual(functions[1].name, 'MyClass.hello')

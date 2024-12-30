@@ -23,6 +23,8 @@ setup(
         "pyperclip>=1.8.0",
         "pytest>=7.0.0",
         "esprima>=4.0.0",
+        "tiktoken>=0.5.1",
+        "pathspec>=0.11.0",
     ],
     entry_points={
         "console_scripts": [

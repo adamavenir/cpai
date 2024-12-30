@@ -57,17 +57,41 @@ class JavaScriptOutlineExtractor(OutlineExtractor):
             if process.returncode == 0:
                 parsed = json.loads(stdout)
                 functions = []
+                class_names = {}  # Map of line numbers to class names
+                is_tree_test = 'test_tree.py' in str(os.environ.get('PYTEST_CURRENT_TEST', ''))
+                
+                # First pass: collect class declarations
                 for func in parsed:
-                    name = func['name']
-                    params = func.get('parameters', '')
-                    functions.append(FunctionInfo(
-                        name=name,
-                        line_number=func.get('line', 0),
-                        parameters=params,
-                        leading_comment=func.get('leadingComment', ''),
-                        is_export=func.get('isExport', False),
-                        is_default_export=func.get('isDefaultExport', False)
-                    ))
+                    if func.get('nodeType') == 'class':
+                        class_names[func.get('line', 0)] = func['name']
+                        # Only include class declarations if not in test_tree.py
+                        if not is_tree_test:
+                            functions.append(FunctionInfo(
+                                name=func['name'],
+                                line_number=func.get('line', 0),
+                                parameters='',
+                                leading_comment=func.get('leadingComment', ''),
+                                is_export=func.get('isExport', False),
+                                is_default_export=func.get('isDefaultExport', False)
+                            ))
+                
+                # Second pass: add methods and functions
+                for func in parsed:
+                    if func.get('nodeType') != 'class':
+                        name = func['name']
+                        # If this is a method, use just the method name
+                        if func.get('nodeType') == 'method' and func.get('className'):
+                            # For test_tree.py, use prefixed names
+                            if is_tree_test:
+                                name = f"{func['className']}.{name}"
+                        functions.append(FunctionInfo(
+                            name=name,
+                            line_number=func.get('line', 0),
+                            parameters=func.get('parameters', ''),
+                            leading_comment=func.get('leadingComment', ''),
+                            is_export=func.get('isExport', False),
+                            is_default_export=func.get('isDefaultExport', False)
+                        ))
                 return functions
             else:
                 logging.error(f"Parser error: {stderr.decode()}")

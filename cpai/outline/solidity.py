@@ -50,13 +50,6 @@ class SolidityOutlineExtractor(OutlineExtractor):
                         name = match.group(1)
                         current_contract = name
                         current_path = [name]
-                        if name not in seen_names:
-                            seen_names.add(name)
-                            functions.append(FunctionInfo(
-                                name=name,
-                                line_number=i + 1,
-                                leading_comment=None
-                            ))
                         break
                 
                 # Look for functions

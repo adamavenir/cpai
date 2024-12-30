@@ -27,7 +27,7 @@ class TestMain(unittest.TestCase):
             
         # Create symlinks for testing
         if os.name != 'nt':  # Skip on Windows
-            os.symlink('src/main.py', 'src/main_link.py')
+            os.symlink('../src/main.py', 'src/main_link.py')
             os.symlink('nonexistent.py', 'src/broken_link.py')
 
     def tearDown(self):
@@ -41,7 +41,8 @@ class TestMain(unittest.TestCase):
             'src/main.py',
             'src/utils.js',
             'lib/helpers.ts',
-            'test/test_main.py'
+            'test/test_main.py',
+            'src/main_link.py'
         }
         
         config = {'include': ['**/*']}  # Include all files

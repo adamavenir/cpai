@@ -149,7 +149,9 @@ def cpai(args, cli_options):
     
     # Get files to process
     files = []
-    for path in args:
+    # If no paths provided, use current directory
+    paths = args if args else ['.']
+    for path in paths:
         if os.path.isdir(path):
             files.extend(get_files(path, config))
         else:

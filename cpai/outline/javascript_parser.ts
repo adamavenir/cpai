@@ -11,6 +11,7 @@ interface FunctionInfo {
     isDefaultExport: boolean;
     leadingComment?: string;
     nodeType: string;
+    className?: string;
 }
 
 function getLeadingComment(node: ts.Node, sourceFile: ts.SourceFile): string | undefined {
@@ -97,13 +98,15 @@ function getExportType(node: ts.Node): 'default' | 'named' | null {
 
 function extractFunctions(sourceFile: ts.SourceFile): FunctionInfo[] {
     const functions: FunctionInfo[] = [];
+    let currentClass: string | null = null;
 
     function visit(node: ts.Node) {
         if (ts.isClassDeclaration(node)) {
-            const name = node.name?.text || 'AnonymousClass';
+            const className = node.name?.text || 'AnonymousClass';
+            currentClass = className;
             const exportType = getExportType(node);
             functions.push({
-                name,
+                name: className,
                 line: sourceFile.getLineAndCharacterOfPosition(node.getStart()).line + 1,
                 leadingComment: getLeadingComment(node, sourceFile),
                 parameters: '',
@@ -119,60 +122,65 @@ function extractFunctions(sourceFile: ts.SourceFile): FunctionInfo[] {
                     const methodName = ts.isConstructorDeclaration(member) ? 'constructor' : member.name?.getText() || 'anonymous';
                     const exportType = getExportType(member);
                     functions.push({
-                        name: methodName,
+                        name: methodName,  // Just use the method name
                         line: sourceFile.getLineAndCharacterOfPosition(member.getStart()).line + 1,
                         leadingComment: getLeadingComment(member, sourceFile),
                         parameters: getParameters(member),
                         isAsync: member.modifiers?.some(m => m.kind === ts.SyntaxKind.AsyncKeyword) || false,
                         isExport: exportType !== null,
                         isDefaultExport: exportType === 'default',
-                        nodeType: 'method'
+                        nodeType: 'method',
+                        className: className  // Add class name for reference
                     });
                 }
             });
-        } else if (ts.isFunctionDeclaration(node) || ts.isArrowFunction(node) || ts.isFunctionExpression(node)) {
-            let name = '';
-            let isExport = false;
-            let isDefaultExport = false;
-
-            if (ts.isFunctionDeclaration(node)) {
-                name = node.name?.text || 'anonymous';
-                const exportType = getExportType(node);
-                isExport = exportType !== null;
-                isDefaultExport = exportType === 'default';
-            } else if (ts.isVariableDeclaration(node.parent)) {
-                name = node.parent.name.getText();
-                // Check for export on variable declaration
-                const statement = node.parent.parent?.parent;
-                if (ts.isVariableStatement(statement)) {
-                    const exportType = getExportType(statement);
-                    isExport = exportType !== null;
-                    isDefaultExport = exportType === 'default';
-                }
-                // Check for separate export default
-                if (!isExport) {
-                    ts.forEachChild(sourceFile, child => {
-                        if (ts.isExportAssignment(child) && 
-                            ts.isIdentifier(child.expression) && 
-                            child.expression.text === name) {
-                            isExport = true;
-                            isDefaultExport = true;
-                        }
+            currentClass = null;
+        } else if (ts.isFunctionDeclaration(node)) {
+            const name = node.name?.text || 'anonymous';
+            const exportType = getExportType(node);
+            functions.push({
+                name,
+                line: sourceFile.getLineAndCharacterOfPosition(node.getStart()).line + 1,
+                leadingComment: getLeadingComment(node, sourceFile),
+                parameters: getParameters(node),
+                isAsync: node.modifiers?.some(m => m.kind === ts.SyntaxKind.AsyncKeyword) || false,
+                isExport: exportType !== null,
+                isDefaultExport: exportType === 'default',
+                nodeType: 'function'
+            });
+        } else if (ts.isVariableStatement(node)) {
+            // Handle variable declarations that might be functions
+            node.declarationList.declarations.forEach(decl => {
+                if (ts.isVariableDeclaration(decl) && decl.initializer && 
+                    (ts.isArrowFunction(decl.initializer) || ts.isFunctionExpression(decl.initializer))) {
+                    const name = decl.name.getText();
+                    const exportType = getExportType(node);
+                    const isExportDefault = node.parent && (
+                        ts.isExportAssignment(node.parent) || 
+                        (node.parent.parent && ts.isExportAssignment(node.parent.parent))
+                    );
+                    functions.push({
+                        name,
+                        line: sourceFile.getLineAndCharacterOfPosition(decl.getStart()).line + 1,
+                        leadingComment: getLeadingComment(decl, sourceFile),
+                        parameters: getParameters(decl.initializer),
+                        isAsync: decl.initializer.modifiers?.some(m => m.kind === ts.SyntaxKind.AsyncKeyword) || false,
+                        isExport: exportType !== null || isExportDefault,
+                        isDefaultExport: exportType === 'default' || isExportDefault,
+                        nodeType: 'function'
                     });
                 }
-            }
-
-            if (name) {
-                functions.push({
-                    name,
-                    line: sourceFile.getLineAndCharacterOfPosition(node.getStart()).line + 1,
-                    leadingComment: getLeadingComment(node, sourceFile),
-                    parameters: getParameters(node),
-                    isAsync: node.modifiers?.some(m => m.kind === ts.SyntaxKind.AsyncKeyword) || false,
-                    isExport,
-                    isDefaultExport,
-                    nodeType: 'function'
-                });
+            });
+        } else if (ts.isExportAssignment(node)) {
+            // Handle export default statements
+            if (ts.isIdentifier(node.expression)) {
+                const name = node.expression.text;
+                // Find the corresponding function and mark it as export default
+                const func = functions.find(f => f.name === name);
+                if (func) {
+                    func.isExport = true;
+                    func.isDefaultExport = true;
+                }
             }
         }
 

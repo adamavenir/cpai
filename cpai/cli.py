@@ -20,6 +20,7 @@ def parse_arguments(argv: Optional[List[str]] = None) -> argparse.Namespace:
     parser.add_argument(
         'files',
         nargs='*',
+        default=['.'],
         help='Files or directories to process'
     )
     

@@ -241,5 +241,22 @@ class TestCPAI(unittest.TestCase):
         self.assertIn('├──', tree_output)  # Check for tree characters
         self.assertIn('└──', tree_output)
 
+    def test_cpai_with_no_args(self):
+        """Test that running cpai with no arguments uses the current directory."""
+        # Create a test file in the current directory
+        with open('test.py', 'w') as f:
+            f.write('def test():\n    pass\n')
+        
+        try:
+            # Call cpai with no arguments
+            result = cpai([], {})
+            
+            # Verify that the file was processed
+            self.assertIsNotNone(result)
+            self.assertIn('test.py', result)
+        finally:
+            # Clean up
+            os.remove('test.py')
+
 if __name__ == '__main__':
     unittest.main()

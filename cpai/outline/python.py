@@ -59,12 +59,7 @@ class PythonOutlineExtractor(OutlineExtractor):
                     class_name = child.name
                     if parent_name:
                         class_name = f"{parent_name}.{class_name}"
-                    functions.append(FunctionInfo(
-                        name=class_name,
-                        line_number=child.lineno,
-                        parameters=None,
-                        leading_comment=ast.get_docstring(child)
-                    ))
+                    # Don't add the class itself as a function
                     functions.extend(self._extract_functions(child, class_name))
         
         return functions

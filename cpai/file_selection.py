@@ -56,12 +56,29 @@ def get_files(directory: str, config: Dict = None, include_all: bool = False) ->
     custom_excludes = config.get('exclude', [])
     file_extensions = [] if include_all else config.get('fileExtensions', [])
     
+    # Adjust patterns if we're searching in a subdirectory
+    base_dir = os.path.basename(directory)
+    adjusted_patterns = []
+    for pattern in include_patterns:
+        if pattern.startswith(f"{base_dir}/"):
+            # Remove the base directory prefix since we're already in that directory
+            pattern = pattern[len(base_dir)+1:]
+            logging.debug(f"Adjusted pattern from {include_patterns} to {pattern}")
+        adjusted_patterns.append(pattern)
+    include_patterns = adjusted_patterns
+    
     logging.debug(f"Include patterns: {include_patterns}")
     logging.debug(f"Exclude patterns: {custom_excludes}")
     logging.debug(f"File extensions: {file_extensions}")
+    logging.debug(f"include_all: {include_all}")
+    logging.debug(f"config.include_all: {config.get('include_all', False)}")
     
-    # Start with default exclude patterns
-    exclude_patterns = DEFAULT_EXCLUDE_PATTERNS.copy()
+    # Start with default exclude patterns only if not include_all
+    exclude_patterns = []
+    if not include_all and not config.get('include_all', False):
+        exclude_patterns = DEFAULT_EXCLUDE_PATTERNS.copy()
+        logging.debug(f"Using default exclude patterns: {exclude_patterns}")
+        
     if custom_excludes:
         if isinstance(custom_excludes, list):
             exclude_patterns.extend(custom_excludes)
@@ -105,14 +122,20 @@ def get_files(directory: str, config: Dict = None, include_all: bool = False) ->
             file_path = os.path.join(root, file)
             
             # Skip broken symlinks
-            if os.path.islink(file_path) and not os.path.exists(os.path.realpath(file_path)):
-                continue
+            if os.path.islink(file_path):
+                real_path = os.path.realpath(file_path)
+                exists = os.path.exists(real_path)
+                logging.debug(f"Found symlink {file_path} -> {real_path} (exists: {exists})")
+                if not exists:
+                    logging.debug(f"Skipping broken symlink: {file_path}")
+                    continue
                 
             # Get relative path from the search directory
             rel_path = os.path.relpath(file_path, directory)
+            logging.debug(f"\nProcessing file: {rel_path}")
             
             # Skip if matches exclude patterns
-            if exclude_spec.match_file(rel_path):
+            if exclude_patterns and exclude_spec.match_file(rel_path):
                 # Check for negation patterns
                 negated = False
                 for pattern in exclude_patterns:
@@ -120,6 +143,7 @@ def get_files(directory: str, config: Dict = None, include_all: bool = False) ->
                         pattern = pattern[1:]  # Remove !
                         if pathspec.patterns.GitWildMatchPattern(pattern).match_file(rel_path):
                             negated = True
+                            logging.debug(f"File {rel_path} negated by pattern !{pattern}")
                             break
                 if not negated:
                     logging.debug(f"Excluding {rel_path} due to exclude pattern")
@@ -130,10 +154,7 @@ def get_files(directory: str, config: Dict = None, include_all: bool = False) ->
             for pattern in include_patterns:
                 # Convert pattern to use forward slashes
                 pattern = pattern.replace(os.sep, '/')
-                
-                # If pattern doesn't start with **, make it match anywhere in the path
-                if not pattern.startswith('**'):
-                    pattern = f"**/{pattern}"
+                logging.debug(f"Checking include pattern: {pattern}")
                 
                 # Create a pathspec for this pattern
                 spec = pathspec.PathSpec.from_lines(
@@ -143,10 +164,14 @@ def get_files(directory: str, config: Dict = None, include_all: bool = False) ->
                 
                 # Convert path to use forward slashes for matching
                 check_path = rel_path.replace(os.sep, '/')
+                logging.debug(f"Checking path {check_path} against pattern {pattern}")
                 
                 if spec.match_file(check_path):
                     matched = True
+                    logging.debug(f"File {check_path} matches pattern {pattern}")
                     break
+                else:
+                    logging.debug(f"File {check_path} does not match pattern {pattern}")
                     
             if not matched:
                 logging.debug(f"Excluding {rel_path} due to not matching include pattern")
