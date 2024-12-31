@@ -62,9 +62,12 @@ class TestExtractor:
         for failed in getattr(pytest_report, 'failed', []):
             location = self._extract_test_location(failed)
             if location:
+                # Extract error message from the report
+                error_message = self._extract_error_message(failed)
+                
                 failure = TestFailure(
                     location=location,
-                    error_message=str(failed.longrepr),
+                    error_message=error_message,
                     traceback=self._format_traceback(failed.longrepr),
                     test_source=self.extract_test_function(
                         location.file_path,
@@ -162,4 +165,22 @@ class TestExtractor:
         """
         if hasattr(longrepr, 'reprcrash'):
             return f"{longrepr.reprcrash.path}:{longrepr.reprcrash.lineno}: {longrepr.reprcrash.message}"
-        return str(longrepr) 
+        return str(longrepr)
+    
+    def _extract_error_message(self, test_report: Any) -> str:
+        """Extract error message from test report.
+        
+        Args:
+            test_report: The pytest test report object
+            
+        Returns:
+            Error message string
+        """
+        if hasattr(test_report, 'error_message'):
+            return test_report.error_message
+        elif hasattr(test_report.longrepr, 'reprcrash'):
+            return test_report.longrepr.reprcrash.message
+        elif isinstance(test_report.longrepr, str):
+            return test_report.longrepr
+        else:
+            return str(test_report.longrepr) 
