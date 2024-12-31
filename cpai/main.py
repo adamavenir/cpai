@@ -41,9 +41,10 @@ def write_output(content, config):
     # Validate content size
     size_info = validate_content_size(content, config.get('chunkSize', DEFAULT_CHUNK_SIZE))
     
-    # Show compatibility info
-    print(size_info['compatibility'])
-    print()
+    # Print to stdout if specified - only output content, no metadata
+    if config.get('stdout', False):
+        sys.stdout.write(content)
+        return
     
     # Write to file if specified
     if config.get('outputFile'):
@@ -54,19 +55,14 @@ def write_output(content, config):
             f.write(content)
         # Get relative path for display
         rel_path = os.path.relpath(output_file)
-        # Add newline before content message
-        print()
-        logging.info(f"{FILE_ICON} {size_info['formatted_chars']} characters ({size_info['formatted_tokens']} tokens) written to {rel_path}")
+        # Show metadata on stderr
+        compat_text = size_info['compatibility']
+        compat_text = compat_text.replace("Output content compatibility:\n", "").strip()
+        sys.stderr.write("\nInput limits: " + compat_text + "\n")
+        sys.stderr.write(f"{FILE_ICON} {size_info['formatted_chars']} characters ({size_info['formatted_tokens']} tokens) written to {rel_path}\n")
         return
     
-    # Print to stdout if specified
-    if config.get('stdout', False):
-        print(content)
-        print()  # Add newline before size message
-        logging.info(f"{STDOUT_ICON} {size_info['formatted_chars']} characters ({size_info['formatted_tokens']} tokens)")
-        return
-    
-    # Otherwise copy to clipboard
+    # Otherwise copy to clipboard and show metadata on stderr
     try:
         # Create a temporary file for the content
         with tempfile.NamedTemporaryFile(mode='w', encoding='utf-8') as temp_file:
@@ -80,12 +76,16 @@ def write_output(content, config):
             if process.returncode != 0:
                 raise subprocess.CalledProcessError(process.returncode, 'pbcopy')
                 
-        # Log success with tree-specific message
-        print()  # Add newline before content message
+        # Show metadata on stderr
+        compat_text = size_info['compatibility']
+        compat_text = compat_text.replace("Output content compatibility:\n", "").strip()
+        sys.stderr.write("\nInput limits: " + compat_text + "\n")
+        
+        # Show clipboard message
         if config.get('tree'):
-            logging.info(f"{CLIPBOARD_ICON} {size_info['formatted_chars']} characters ({size_info['formatted_tokens']} tokens) - tree copied to clipboard!")
+            sys.stderr.write(f"📋 {size_info['formatted_chars']} characters ({size_info['formatted_tokens']} tokens) - tree copied to clipboard!\n")
         else:
-            logging.info(f"{CLIPBOARD_ICON} {size_info['formatted_chars']} characters ({size_info['formatted_tokens']} tokens) copied to clipboard")
+            sys.stderr.write(f"📋 {size_info['formatted_chars']} characters ({size_info['formatted_tokens']} tokens) copied to clipboard\n")
             
     except (subprocess.CalledProcessError, UnicodeEncodeError) as e:
         logging.error(f"Failed to copy to clipboard: {str(e)}")
@@ -235,10 +235,11 @@ def cpai(args, cli_options):
         # If no paths provided, use current directory
         paths = args if args else ['.']
         for path in paths:
-            if os.path.isdir(path):
-                files.extend(get_files(path, config))
+            abs_path = os.path.abspath(path)
+            if os.path.isdir(abs_path):
+                files.extend(get_files(abs_path, config))
             else:
-                files.append(path)
+                files.append(abs_path)
                 
         if not files:
             logging.warning("No files found to process.")
@@ -260,10 +261,10 @@ def cpai(args, cli_options):
             
             # Write output
             write_output(content, config)
+            
+            return content
         finally:
             progress.stop()
-        
-        return content
 
 def main():
     """Entry point for the cpai tool."""

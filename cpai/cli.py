@@ -32,7 +32,7 @@ def parse_arguments(argv: Optional[List[str]] = None) -> argparse.Namespace:
     parser.add_argument(
         '--stdout',
         action='store_true',
-        help='Print output to stdout instead of clipboard'
+        help='Print output to stdout instead of clipboard (no metadata)'
     )
     
     parser.add_argument(
@@ -77,6 +77,12 @@ def parse_arguments(argv: Optional[List[str]] = None) -> argparse.Namespace:
         help='Overwrite existing output files without confirmation'
     )
     
+    parser.add_argument(
+        '--notree',
+        action='store_true',
+        help='Skip tree output, only show code with headers'
+    )
+    
     return parser.parse_args(argv)
 
 def merge_cli_options(args: argparse.Namespace, config: Dict[str, Any]) -> Dict[str, Any]:
@@ -110,6 +116,7 @@ def merge_cli_options(args: argparse.Namespace, config: Dict[str, Any]) -> Dict[
         'include_all': args.all,
         'tree': args.tree or config.get('tree', False),  # Keep tree mode if set by bydir
         'overwrite': args.overwrite,  # Add overwrite option
+        'notree': args.notree,  # Add notree mode
     })
     
     # Add exclude patterns if specified

@@ -9,9 +9,16 @@ from .constants import (
     DEFAULT_FILE_EXTENSIONS
 )
 
-def get_relative_path(path: str) -> str:
-    """Get relative path from current directory."""
-    rel_path = os.path.relpath(path)
+def get_relative_path(path: str, base_dir: str = None) -> str:
+    """Get relative path from base directory.
+    
+    Args:
+        path: Path to make relative
+        base_dir: Base directory to make path relative to (defaults to current directory)
+    """
+    if base_dir is None:
+        base_dir = os.getcwd()
+    rel_path = os.path.relpath(path, base_dir)
     # Remove ./ prefix if present
     if rel_path.startswith('./'):
         rel_path = rel_path[2:]
@@ -119,19 +126,19 @@ def get_files(directory: str, config: Dict = None, include_all: bool = False) ->
     all_files = []
     for root, _, files in os.walk(directory, followlinks=True):
         for file in files:
-            file_path = os.path.join(root, file)
+            abs_path = os.path.join(root, file)
             
             # Skip broken symlinks
-            if os.path.islink(file_path):
-                real_path = os.path.realpath(file_path)
+            if os.path.islink(abs_path):
+                real_path = os.path.realpath(abs_path)
                 exists = os.path.exists(real_path)
-                logging.debug(f"Found symlink {file_path} -> {real_path} (exists: {exists})")
+                logging.debug(f"Found symlink {abs_path} -> {real_path} (exists: {exists})")
                 if not exists:
-                    logging.debug(f"Skipping broken symlink: {file_path}")
+                    logging.debug(f"Skipping broken symlink: {abs_path}")
                     continue
                 
             # Get relative path from the search directory
-            rel_path = os.path.relpath(file_path, directory)
+            rel_path = os.path.relpath(abs_path, directory)
             logging.debug(f"\nProcessing file: {rel_path}")
             
             # Skip if matches exclude patterns
@@ -185,7 +192,7 @@ def get_files(directory: str, config: Dict = None, include_all: bool = False) ->
                     continue
             
             logging.debug(f"Including file: {rel_path}")
-            all_files.append(rel_path)  # Store relative path
+            all_files.append(abs_path)  # Store absolute path
     
     return sorted(all_files)
 
@@ -248,8 +255,8 @@ def should_process_file(file_path: str, config: Dict) -> bool:
         check_path = rel_path.replace(os.sep, '/')
         
         if spec.match_file(check_path):
-            logging.debug(f"File {rel_path} matches include pattern {pattern}")
+            logging.debug(f"File {rel_path} included by pattern {pattern}")
             return True
             
-    logging.debug(f"File {rel_path} does not match any include patterns")
+    logging.debug(f"File {rel_path} excluded by not matching any include pattern")
     return False 
