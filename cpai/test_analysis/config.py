@@ -34,6 +34,9 @@ class TestAnalysisConfig:
     pytest_args: List[str] = field(default_factory=list)
     pytest_ini_options: Dict[str, str] = field(default_factory=dict)
     
+    # Workspace settings
+    workspace_dir: Optional[str] = None
+    
     @classmethod
     def from_env(cls) -> "TestAnalysisConfig":
         """Create config from environment variables."""
@@ -50,6 +53,7 @@ class TestAnalysisConfig:
             cache_dir=Path(os.getenv("TEST_ANALYSIS_CACHE_DIR", ".cache/test_analysis")),
             silent=os.getenv("TEST_ANALYSIS_SILENT", "0") == "1",
             notree=os.getenv("TEST_ANALYSIS_NOTREE", "0") == "1",
+            workspace_dir=os.getenv("TEST_ANALYSIS_WORKSPACE_DIR")
         )
     
     @classmethod
