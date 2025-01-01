@@ -56,6 +56,10 @@ def get_files(directory: str, config: Dict = None, include_all: bool = False) ->
     custom_excludes = config.get('exclude', [])
     file_extensions = [] if include_all else config.get('fileExtensions', [])
     
+    # If nodocs is set, exclude .md files
+    if config.get('nodocs'):
+        custom_excludes.append('**/*.md')
+    
     # Adjust patterns if we're searching in a subdirectory
     base_dir = os.path.basename(directory)
     adjusted_patterns = []
@@ -202,6 +206,11 @@ def should_process_file(file_path: str, config: Dict) -> bool:
     # Get file extension
     _, ext = os.path.splitext(file_path)
     ext = ext.lower()
+    
+    # Check if docs should be excluded
+    if config.get('nodocs') and ext == '.md':
+        logging.debug(f"File {file_path} excluded due to nodocs flag")
+        return False
     
     # Check if extension is in allowed list
     if 'fileExtensions' in config and ext not in config['fileExtensions']:

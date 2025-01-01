@@ -48,6 +48,12 @@ def parse_arguments(argv: Optional[List[str]] = None) -> argparse.Namespace:
     )
     
     parser.add_argument(
+        '--nodocs',
+        action='store_true',
+        help='Exclude documentation files (.md)'
+    )
+    
+    parser.add_argument(
         '--exclude',
         nargs='+',
         help='Additional patterns to exclude'
@@ -110,6 +116,7 @@ def merge_cli_options(args: argparse.Namespace, config: Dict[str, Any]) -> Dict[
         'include_all': args.all,
         'tree': args.tree or config.get('tree', False),  # Keep tree mode if set by bydir
         'overwrite': args.overwrite,  # Add overwrite option
+        'nodocs': args.nodocs  # Add nodocs option
     })
     
     # Add exclude patterns if specified

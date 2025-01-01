@@ -504,5 +504,77 @@ class TestCPAI(unittest.TestCase):
             # Should not write any files due to collision
             mock_write.assert_not_called()
 
+    def test_nodocs_flag_in_cli_options(self):
+        """Test that nodocs flag is properly parsed from CLI arguments."""
+        from cpai.cli import parse_arguments, merge_cli_options
+        
+        # Test without nodocs flag
+        args = parse_arguments(['some/path'])
+        config = merge_cli_options(args, {})
+        assert not config.get('nodocs', False)
+        
+        # Test with nodocs flag
+        args = parse_arguments(['--nodocs', 'some/path'])
+        config = merge_cli_options(args, {})
+        assert config.get('nodocs', False)
+
+    def test_file_selection_with_nodocs(self):
+        """Test that markdown files are properly handled with nodocs flag."""
+        from cpai.file_selection import should_process_file
+        
+        # Create test files
+        md_file = os.path.join(self.test_dir, "test.md")
+        py_file = os.path.join(self.test_dir, "test.py")
+        with open(md_file, 'w') as f:
+            f.write('existing content')
+        with open(py_file, 'w') as f:
+            f.write('def test():\n    pass\n')
+        
+        # Test without nodocs flag (should include markdown)
+        config = {}
+        assert should_process_file(md_file, config)
+        assert should_process_file(py_file, config)
+        
+        # Test with nodocs flag (should exclude markdown)
+        config = {'nodocs': True}
+        assert not should_process_file(md_file, config)
+        assert should_process_file(py_file, config)
+
+    def test_get_files_with_nodocs(self):
+        """Test that get_files properly handles nodocs flag."""
+        from cpai.file_selection import get_files
+        
+        # Create test directory structure
+        test_root = os.path.join(self.test_dir, "nodocs_test")
+        docs_dir = os.path.join(test_root, "docs")
+        src_dir = os.path.join(test_root, "src")
+        os.makedirs(docs_dir, exist_ok=True)
+        os.makedirs(src_dir, exist_ok=True)
+        
+        # Create test files
+        with open(os.path.join(docs_dir, "readme.md"), 'w') as f:
+            f.write('# Test readme')
+        with open(os.path.join(docs_dir, "api.md"), 'w') as f:
+            f.write('# API docs')
+        with open(os.path.join(src_dir, "main.py"), 'w') as f:
+            f.write('def main():\n    pass\n')
+        with open(os.path.join(src_dir, "utils.py"), 'w') as f:
+            f.write('def util():\n    pass\n')
+        with open(os.path.join(src_dir, "docs.md"), 'w') as f:
+            f.write('# Source docs')
+        
+        # Test without nodocs flag (should include markdown)
+        config = {}
+        files = get_files(test_root, config)
+        assert any(f.endswith('.md') for f in files)
+        assert len([f for f in files if f.endswith('.md')]) == 3
+        assert len([f for f in files if f.endswith('.py')]) == 2
+        
+        # Test with nodocs flag (should exclude markdown)
+        config = {'nodocs': True}
+        files = get_files(test_root, config)
+        assert not any(f.endswith('.md') for f in files)
+        assert len([f for f in files if f.endswith('.py')]) == 2
+
 if __name__ == '__main__':
     unittest.main()

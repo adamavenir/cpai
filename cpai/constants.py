@@ -138,7 +138,8 @@ DEFAULT_FILE_EXTENSIONS = [
     '.sh',
     '.bash',
     '.zsh',
-    '.fish'
+    '.fish',
+    '.md'
 ]
 
 # Core source patterns to always include

@@ -43,7 +43,6 @@ def write_output(content, config):
     
     # Show compatibility info
     print(size_info['compatibility'])
-    print()
     
     # Write to file if specified
     if config.get('outputFile'):
@@ -54,15 +53,12 @@ def write_output(content, config):
             f.write(content)
         # Get relative path for display
         rel_path = os.path.relpath(output_file)
-        # Add newline before content message
-        print()
         logging.info(f"{FILE_ICON} {size_info['formatted_chars']} characters ({size_info['formatted_tokens']} tokens) written to {rel_path}")
         return
     
     # Print to stdout if specified
     if config.get('stdout', False):
         print(content)
-        print()  # Add newline before size message
         logging.info(f"{STDOUT_ICON} {size_info['formatted_chars']} characters ({size_info['formatted_tokens']} tokens)")
         return
     
@@ -81,7 +77,6 @@ def write_output(content, config):
                 raise subprocess.CalledProcessError(process.returncode, 'pbcopy')
                 
         # Log success with tree-specific message
-        print()  # Add newline before content message
         if config.get('tree'):
             logging.info(f"{CLIPBOARD_ICON} {size_info['formatted_chars']} characters ({size_info['formatted_tokens']} tokens) - tree copied to clipboard!")
         else:
@@ -112,17 +107,20 @@ def process_files(files: List[str], config: Dict = None) -> Dict[str, Dict]:
 def process_file(file_path: str, options: Dict[str, Any]) -> Dict[str, Any]:
     """Process a single file and return its content and outline."""
     try:
+        # Convert to absolute path
+        abs_path = os.path.abspath(file_path)
+        
         # In tree mode, we only need the outline
         if options.get('tree'):
-            outline = extract_outline(file_path)
+            outline = extract_outline(abs_path)
             # Return empty outline instead of None if extraction fails
             return {'outline': outline or []}
             
         # For regular mode, get both content and outline
-        with open(file_path, 'r', encoding='utf-8') as f:
+        with open(abs_path, 'r', encoding='utf-8') as f:
             content = f.read()
             
-        outline = extract_outline(file_path)
+        outline = extract_outline(abs_path)
         return {
             'content': content,
             'outline': outline or []  # Return empty list instead of None
@@ -137,10 +135,13 @@ def extract_outline(file_path):
     from .outline import EXTRACTORS
     
     try:
+        # Convert to absolute path
+        abs_path = os.path.abspath(file_path)
+        
         # Find the appropriate extractor
         for extractor in EXTRACTORS:
-            if extractor.supports_file(file_path):
-                with open(file_path, 'r', encoding='utf-8') as f:
+            if extractor.supports_file(abs_path):
+                with open(abs_path, 'r', encoding='utf-8') as f:
                     content = f.read()
                 return extractor.extract_functions(content)
         return []
@@ -157,6 +158,9 @@ def cpai(args, cli_options):
     config = read_config()
     config.update(cli_options)
     
+    # Store current directory
+    original_cwd = os.getcwd()
+    
     if config.get('bydir'):
         # Process each directory independently
         base_dirs = config['bydir_dirs']
@@ -165,9 +169,6 @@ def cpai(args, cli_options):
         # If using current directory, get immediate subdirectories
         if base_dirs == ['.']:
             base_dirs = [d for d in os.listdir('.') if os.path.isdir(d)]
-        
-        # Store current directory
-        original_cwd = os.getcwd()
         
         for dir_path in base_dirs:
             # Skip if already processed
@@ -234,11 +235,17 @@ def cpai(args, cli_options):
         files = []
         # If no paths provided, use current directory
         paths = args if args else ['.']
+        
+        # Convert all paths to absolute paths
         for path in paths:
-            if os.path.isdir(path):
-                files.extend(get_files(path, config))
+            abs_path = os.path.abspath(path)
+            if os.path.isdir(abs_path):
+                # Get files from directory
+                dir_files = get_files(abs_path, config)
+                # Convert relative paths to absolute paths
+                files.extend([os.path.join(abs_path, f) for f in dir_files])
             else:
-                files.append(path)
+                files.append(abs_path)
                 
         if not files:
             logging.warning("No files found to process.")
@@ -260,10 +267,12 @@ def cpai(args, cli_options):
             
             # Write output
             write_output(content, config)
+            
+            return processed_files
         finally:
             progress.stop()
-        
-        return content
+            # Restore original directory
+            os.chdir(original_cwd)
 
 def main():
     """Entry point for the cpai tool."""
